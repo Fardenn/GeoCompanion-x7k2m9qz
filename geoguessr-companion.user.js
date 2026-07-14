@@ -1,15 +1,15 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      2.2
+// @version      2.21
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        unsafeWindow
-// @updateURL    https://raw.githubusercontent.com/Fardenn/geo-companion-x7k2m9qz/main/geoguessr-companion.user.js
-// @downloadURL  https://raw.githubusercontent.com/Fardenn/geo-companion-x7k2m9qz/main/geoguessr-companion.user.js
+// @updateURL    https://raw.githubusercontent.com/Fardenn/GeoCompanion-x7k2m9qz/main/geoguessr-companion.user.js
+// @downloadURL  https://raw.githubusercontent.com/Fardenn/GeoCompanion-x7k2m9qz/main/geoguessr-companion.user.js
 // ==/UserScript==
 
 (function () {

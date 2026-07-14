@@ -8,7 +8,7 @@ d'événements de partie, historique des rounds, tips par pays, statistiques
 
 1. Installer [Tampermonkey](https://www.tampermonkey.net/) sur ton navigateur.
 2. Ouvrir directement ce lien pour installer le script :
-   `https://raw.githubusercontent.com/Fardenn/geo-companion-x7k2m9qz/main/geoguessr-companion.user.js`
+   `https://raw.githubusercontent.com/Fardenn/GeoCompanion-x7k2m9qz/main/geoguessr-companion.user.js`
 3. Tampermonkey propose automatiquement l'installation.
 
 Le script se met ensuite à jour automatiquement (Tampermonkey vérifie

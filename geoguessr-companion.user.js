@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      5.2
+// @version      5.8
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -57,6 +57,71 @@
 
   // Events disponibles : 'gameStart', 'gameEnd', 'roundStart', 'roundEnd'
   // Payload : l'objet "game" tel que renvoyé par l'API GeoGuessr
+
+  // ============================================================
+  // CORE: notify (notifications discrètes, non bloquantes)
+  // ------------------------------------------------------------
+  // Point d'entrée unique pour signaler une erreur à l'utilisateur —
+  // remplace le mélange précédent console.error (invisible) / alert
+  // (bloquant). Toast discret en bas de l'écran, auto-disparaît ;
+  // le détail technique reste toujours loggé en console à côté.
+  // ============================================================
+  // ============================================================
+  // CORE: thème (variables CSS injectées une seule fois)
+  // ------------------------------------------------------------
+  // Centralise toutes les couleurs/dégradés en un seul endroit —
+  // au lieu de chercher/remplacer des codes hex dans tout le
+  // fichier pour ajuster le thème, on modifie juste les variables
+  // ci-dessous. Palette basée sur le brand book officiel GeoGuessr
+  // (design.geoguessr.com/the-brand/colors).
+  // ============================================================
+  function injectThemeStyles() {
+    if (document.getElementById('geo-companion-theme')) return; // déjà injecté
+    const style = document.createElement('style');
+    style.id = 'geo-companion-theme';
+    style.textContent = `
+      :root {
+        --gc-bg: #1a1a2e;
+        --gc-bg-gradient: linear-gradient(160deg, #23223f, #14131f);
+        --gc-bg-secondary: #2a2a3d;
+        --gc-bg-secondary-hover: #33334a;
+        --gc-accent: #7950e5;
+        --gc-accent-gradient: linear-gradient(135deg, #9171f0, #7950e5);
+        --gc-danger: #e94560;
+        --gc-danger-gradient: linear-gradient(135deg, #ef6478, #e94560);
+        --gc-danger-bg: #3a1620;
+        --gc-text: #f0f0f0;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+  injectThemeStyles();
+
+  GeoCompanion.notify = function (message, type = 'error') {
+    const colors = { error: 'var(--gc-danger)', success: '#4ade80', info: 'var(--gc-accent)' };
+    const color = colors[type] || colors.error;
+
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--gc-bg);
+      color: ${color};
+      border: 1px solid ${color};
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-family: -apple-system, sans-serif;
+      font-size: 14px;
+      z-index: 9999999;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      max-width: 80vw;
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+  };
 
   // ============================================================
   // CORE: détection des events de partie (fetch/XHR + parsing)
@@ -309,11 +374,13 @@
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           console.error(`[GeoCompanion] Erreur insertion Supabase (${table}) :`, res.status, text);
+          GeoCompanion.notify(`Échec de l'enregistrement (${table})`, 'error');
           return false;
         }
         return true;
       } catch (e) {
         console.error(`[GeoCompanion] Exception insertion Supabase (${table}) :`, e);
+        GeoCompanion.notify(`Échec de l'enregistrement (${table})`, 'error');
         return false;
       }
     },
@@ -329,11 +396,13 @@
         });
         if (!res.ok) {
           console.error(`[GeoCompanion] Erreur lecture Supabase (${table}) :`, res.status);
+          GeoCompanion.notify(`Échec de la lecture des données (${table})`, 'error');
           return null;
         }
         return await res.json();
       } catch (e) {
         console.error(`[GeoCompanion] Exception lecture Supabase (${table}) :`, e);
+        GeoCompanion.notify(`Échec de la lecture des données (${table})`, 'error');
         return null;
       }
     },
@@ -354,11 +423,13 @@
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           console.error(`[GeoCompanion] Erreur update Supabase (${table}) :`, res.status, text);
+          GeoCompanion.notify(`Échec de la mise à jour (${table})`, 'error');
           return false;
         }
         return true;
       } catch (e) {
         console.error(`[GeoCompanion] Exception update Supabase (${table}) :`, e);
+        GeoCompanion.notify(`Échec de la mise à jour (${table})`, 'error');
         return false;
       }
     },
@@ -377,11 +448,13 @@
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           console.error(`[GeoCompanion] Erreur delete Supabase (${table}) :`, res.status, text);
+          GeoCompanion.notify(`Échec de la suppression (${table})`, 'error');
           return false;
         }
         return true;
       } catch (e) {
         console.error(`[GeoCompanion] Exception delete Supabase (${table}) :`, e);
+        GeoCompanion.notify(`Échec de la suppression (${table})`, 'error');
         return false;
       }
     },
@@ -401,11 +474,13 @@
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           console.error(`[GeoCompanion] Erreur delete Supabase (${table}) :`, res.status, text);
+          GeoCompanion.notify(`Échec de la suppression (${table})`, 'error');
           return false;
         }
         return true;
       } catch (e) {
         console.error(`[GeoCompanion] Exception delete Supabase (${table}) :`, e);
+        GeoCompanion.notify(`Échec de la suppression (${table})`, 'error');
         return false;
       }
     },
@@ -426,11 +501,13 @@
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           console.error(`[GeoCompanion] Erreur RPC Supabase (${fnName}) :`, res.status, text);
+          GeoCompanion.notify(`Échec du calcul des statistiques`, 'error');
           return null;
         }
         return await res.json();
       } catch (e) {
         console.error(`[GeoCompanion] Exception RPC Supabase (${fnName}) :`, e);
+        GeoCompanion.notify(`Échec du calcul des statistiques`, 'error');
         return null;
       }
     },
@@ -1030,7 +1107,7 @@
           max-width: 480px;
           max-height: 80vh;
           overflow-y: auto;
-          background: #1e1e2e;
+          background: var(--gc-bg-gradient);
           color: #f0f0f0;
           border-radius: 12px;
           padding: 16px;
@@ -1060,7 +1137,7 @@
           max-height: 85vh;
           display: flex;
           flex-direction: column;
-          background: #1e1e2e;
+          background: var(--gc-bg-gradient);
           color: #f0f0f0;
           border-radius: 12px;
           padding: 14px;
@@ -1094,7 +1171,7 @@
               ${row.country_code ? countryNameFromCode(row.country_code) : 'Pays inconnu'}
               ${
                 row.country_code && tldFromCode(row.country_code)
-                  ? `<span style="opacity:0.55; font-size:16px; font-weight:400;">(${tldFromCode(row.country_code)})</span>`
+                  ? `<span style="font-size:22px; font-weight:bold;">(${tldFromCode(row.country_code)})</span>`
                   : ''
               }
             </div>
@@ -1108,7 +1185,7 @@
         <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
         <button id="geo-companion-toggle-stats-btn" style="
           padding:8px; border-radius:8px; border:none; cursor:pointer;
-          background:#33334a; color:white; font-size:14px; width:100%;
+          background:var(--gc-bg-secondary-hover); color:white; font-size:14px; width:100%;
         ">📊 Voir les stats</button>
         <div id="geo-companion-stats-section" style="display:none; margin-top:10px;">
           <div id="geo-companion-stats">Chargement des statistiques…</div>
@@ -1145,7 +1222,7 @@
             (f) => `
             <button data-filter="${f.key}" style="
               flex:1; padding:10px 0; border-radius:8px; border:none; cursor:pointer;
-              background:${f.key === activeFilter ? '#4a9eff' : '#33334a'};
+              background:${f.key === activeFilter ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'};
               color:white; font-size:16px; font-weight:600;
             ">${f.label}</button>
           `
@@ -1225,7 +1302,7 @@
         .map(
           (p) => `
         <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px;
-          background:${p.player === me ? '#33334a' : 'transparent'}; border-radius:6px; margin-bottom:2px;">
+          background:${p.player === me ? 'var(--gc-bg-secondary-hover)' : 'transparent'}; border-radius:6px; margin-bottom:2px;">
           <span style="font-weight:${p.player === me ? '700' : '400'};">${escapeHtml(p.player)}</span>
           <span style="font-size:13px; opacity:0.85;">
             ${p.count} rounds · ${p.avgScore ?? '-'} pts moy. · ${p.successRate != null ? p.successRate + '%' : '-'}
@@ -1262,12 +1339,12 @@
 
     function tipHtml(tip) {
       const buttonsHtml = `
-        <button data-edit-tip="${tip.id}" style="background:rgba(0,0,0,0.55); border:none; color:#4a9eff; cursor:pointer; font-size:16px; padding:4px 6px; border-radius:5px;" title="Modifier">✏️</button>
-        <button data-delete-tip="${tip.id}" style="background:rgba(0,0,0,0.55); border:none; color:#ff6b6b; cursor:pointer; font-size:16px; padding:4px 6px; border-radius:5px;" title="Supprimer">🗑️</button>
+        <button data-edit-tip="${tip.id}" style="background:rgba(0,0,0,0.55); border:none; color:var(--gc-accent); cursor:pointer; font-size:16px; padding:4px 6px; border-radius:5px;" title="Modifier">✏️</button>
+        <button data-delete-tip="${tip.id}" style="background:rgba(0,0,0,0.55); border:none; color:var(--gc-danger); cursor:pointer; font-size:16px; padding:4px 6px; border-radius:5px;" title="Supprimer">🗑️</button>
       `;
 
       return `
-        <div style="background:#2a2a3d; border-radius:8px; padding:6px 8px; font-size:16px;">
+        <div style="background:var(--gc-bg-secondary); border-radius:8px; padding:6px 8px; font-size:16px;">
           ${tip.content ? `<div style="margin-bottom:4px; white-space:pre-wrap; font-size:18px;">${escapeHtml(tip.content)}</div>` : ''}
           ${
             tip.image_url
@@ -1288,7 +1365,7 @@
       if (!formContainer) return;
 
       formContainer.innerHTML = `
-        <div style="margin-top:6px; background:#2a2a3d; border-radius:8px; padding:8px;">
+        <div style="margin-top:6px; background:var(--gc-bg-secondary); border-radius:8px; padding:8px;">
           <textarea id="geo-companion-tip-text" placeholder="Texte du tip (optionnel)" style="
             width:100%; min-height:50px; border-radius:6px; border:none; padding:6px; box-sizing:border-box;
             background:#1a1a28; color:white; font-family:inherit; font-size:13px; resize:vertical;
@@ -1300,8 +1377,8 @@
             background:#1a1a28; color:white; font-size:13px;
           ">
           <div style="display:flex; gap:6px; margin-top:6px;">
-            <button id="geo-companion-tip-save" style="flex:1; padding:6px; border-radius:6px; border:none; cursor:pointer; background:#4a9eff; color:white; font-weight:600; font-size:13px;">Enregistrer</button>
-            <button id="geo-companion-tip-cancel" style="flex:1; padding:6px; border-radius:6px; border:none; cursor:pointer; background:#33334a; color:white; font-size:13px;">Annuler</button>
+            <button id="geo-companion-tip-save" style="flex:1; padding:6px; border-radius:6px; border:none; cursor:pointer; background:var(--gc-accent-gradient); color:white; font-weight:600; font-size:13px;">Enregistrer</button>
+            <button id="geo-companion-tip-cancel" style="flex:1; padding:6px; border-radius:6px; border:none; cursor:pointer; background:var(--gc-bg-secondary-hover); color:white; font-size:13px;">Annuler</button>
           </div>
         </div>
       `;
@@ -1343,12 +1420,12 @@
           <div style="font-weight:bold; font-size:22px;">
             💡 Tips ${
               plonkitUrl
-                ? `<a href="${plonkitUrl}" target="_blank" rel="noopener noreferrer" style="color:#4a9eff; text-decoration:underline; font-size:17px;">🔗 Plonkit</a>`
+                ? `<a href="${plonkitUrl}" target="_blank" rel="noopener noreferrer" style="color:var(--gc-accent); text-decoration:underline; font-size:17px;">🔗 Plonkit</a>`
                 : ''
             }
           </div>
           <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" style="
-            background:none; border:none; color:#4a9eff; cursor:pointer; font-size:18px;
+            background:none; border:none; color:var(--gc-accent); cursor:pointer; font-size:18px;
           ">▼</button>
         </div>
         <div id="geo-companion-tips-body" style="display:flex; flex-direction:column; min-height:0; flex:1;">
@@ -1366,7 +1443,7 @@
           </div>
           <button id="geo-companion-add-tip-btn" style="
             margin-top:6px; padding:7px; border-radius:8px; border:none; cursor:pointer;
-            background:#33334a; color:white; font-size:16px; width:100%; flex-shrink:0;
+            background:var(--gc-bg-secondary-hover); color:white; font-size:16px; width:100%; flex-shrink:0;
           ">+ Ajouter un tip</button>
           <div id="geo-companion-tip-form" style="flex-shrink:0;"></div>
         </div>
@@ -1418,10 +1495,10 @@
       const hasContent = info.route_text || info.route_image_url;
 
       container.innerHTML = `
-        <div style="background:#2a2a3d; border-radius:6px; padding:7px 9px; font-size:15px; height:100%; box-sizing:border-box;">
+        <div style="background:var(--gc-bg-secondary); border-radius:6px; padding:7px 9px; font-size:15px; height:100%; box-sizing:border-box;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <span style="opacity:0.75; font-weight:700; font-size:15px;">Route 🚗 ${drivingSideLabel(info.driving_side)}</span>
-            <button data-edit-route style="background:none; border:none; color:#4a9eff; cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
+            <button data-edit-route style="background:none; border:none; color:var(--gc-accent); cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
           </div>
           <div data-route-display style="margin-top:2px;">
             ${
@@ -1458,15 +1535,15 @@
           ">
           <div style="display:flex; gap:4px; margin-top:6px;">
             <button data-route-side="left" style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:${
-              info.driving_side === 'left' ? '#4a9eff' : '#33334a'
+              info.driving_side === 'left' ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'
             }; color:white; font-size:11px;">⬅️ Gauche</button>
             <button data-route-side="right" style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:${
-              info.driving_side === 'right' ? '#4a9eff' : '#33334a'
+              info.driving_side === 'right' ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'
             }; color:white; font-size:11px;">➡️ Droite</button>
           </div>
           <div style="display:flex; gap:4px; margin-top:6px;">
-            <button data-save-route style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#4a9eff; color:white; font-size:13px;">OK</button>
-            <button data-cancel-route style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#33334a; color:white; font-size:13px;">Annuler</button>
+            <button data-save-route style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-accent-gradient); color:white; font-size:13px;">OK</button>
+            <button data-cancel-route style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-bg-secondary-hover); color:white; font-size:13px;">Annuler</button>
           </div>
         `;
 
@@ -1480,7 +1557,7 @@
           btn.addEventListener('click', () => {
             selectedSide = btn.dataset.routeSide;
             formEl.querySelectorAll('[data-route-side]').forEach((b) => {
-              b.style.background = b.dataset.routeSide === selectedSide ? '#4a9eff' : '#33334a';
+              b.style.background = b.dataset.routeSide === selectedSide ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)';
             });
           });
         });
@@ -1548,10 +1625,10 @@
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
           ${COUNTRY_INFO_FIELDS.map(
             (f) => `
-            <div style="${f.fullWidth ? 'grid-column:1 / span 2;' : ''} background:#2a2a3d; border-radius:6px; padding:7px 9px; font-size:15px;">
+            <div style="${f.fullWidth ? 'grid-column:1 / span 2;' : ''} background:var(--gc-bg-secondary); border-radius:6px; padding:7px 9px; font-size:15px;">
               <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="opacity:0.75; font-weight:700; font-size:15px;">${f.label}</span>
-                <button data-edit-field="${f.key}" style="background:none; border:none; color:#4a9eff; cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
+                <button data-edit-field="${f.key}" style="background:none; border:none; color:var(--gc-accent); cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
               </div>
               <div data-field-display="${f.key}" style="margin-top:2px;">${countryInfoFieldDisplay(
                 f,
@@ -1579,8 +1656,8 @@
                 background:#1a1a28; color:white; font-size:15px; font-family:inherit; resize:vertical;
               ">${escapeHtml(currentValue)}</textarea>
               <div style="display:flex; gap:4px; margin-top:4px;">
-                <button data-save-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#4a9eff; color:white; font-size:13px;">OK</button>
-                <button data-cancel-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#33334a; color:white; font-size:13px;">Annuler</button>
+                <button data-save-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-accent-gradient); color:white; font-size:13px;">OK</button>
+                <button data-cancel-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-bg-secondary-hover); color:white; font-size:13px;">Annuler</button>
               </div>
             `
             : `
@@ -1591,8 +1668,8 @@
                 background:#1a1a28; color:white; font-size:15px;
               ">
               <div style="display:flex; gap:4px; margin-top:4px;">
-                <button data-save-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#4a9eff; color:white; font-size:13px;">OK</button>
-                <button data-cancel-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#33334a; color:white; font-size:13px;">Annuler</button>
+                <button data-save-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-accent-gradient); color:white; font-size:13px;">OK</button>
+                <button data-cancel-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-bg-secondary-hover); color:white; font-size:13px;">Annuler</button>
               </div>
             `;
 
@@ -1634,10 +1711,10 @@
           : '';
 
       container.innerHTML = `
-        <div style="background:#2a2a3d; border-radius:6px; padding:7px 9px; font-size:15px;">
+        <div style="background:var(--gc-bg-secondary); border-radius:6px; padding:7px 9px; font-size:15px;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <span style="opacity:0.75; font-weight:700; font-size:15px;">Voiture</span>
-            <button data-edit-voiture style="background:none; border:none; color:#4a9eff; cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
+            <button data-edit-voiture style="background:none; border:none; color:var(--gc-accent); cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
           </div>
           <div data-voiture-display style="margin-top:2px;">
             ${
@@ -1678,8 +1755,8 @@
             Exclusif au pays
           </label>
           <div style="display:flex; gap:4px; margin-top:6px;">
-            <button data-save-voiture style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#4a9eff; color:white; font-size:13px;">OK</button>
-            <button data-cancel-voiture style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#33334a; color:white; font-size:13px;">Annuler</button>
+            <button data-save-voiture style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-accent-gradient); color:white; font-size:13px;">OK</button>
+            <button data-cancel-voiture style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-bg-secondary-hover); color:white; font-size:13px;">Annuler</button>
           </div>
         `;
 
@@ -1789,7 +1866,7 @@
           max-height: 63.5vh;
           display: flex;
           flex-direction: column;
-          background: #1e1e2e;
+          background: var(--gc-bg-gradient);
           color: #f0f0f0;
           border-radius: 12px;
           padding: 12px;
@@ -1812,99 +1889,13 @@
       return { solid: `hsl(${hue}, 65%, 45%)`, wash: `hsla(${hue}, 65%, 45%, 0.18)` };
     }
 
-    async function renderDashboard() {
-      const panel = ensureDashboard();
+    // Construit et affiche la liste des pays à partir de stats déjà chargées
+    // (aucune requête réseau ici — c'est le rôle de renderDashboard/du bouton
+    // Actualiser).
+    function renderDashboardCountryList(allStats) {
+      const listEl = document.getElementById('geo-companion-dashboard-list');
+      if (!listEl) return;
 
-      const playerName = GeoCompanion.getPlayerName();
-      let allStats;
-
-      if (!playerName) {
-        allStats = {};
-      } else if (dashboardStatsCache.has(dashboardActiveFilter)) {
-        // déjà en cache pour ce filtre (ex: on ne fait que changer de continent) — pas de requête réseau
-        allStats = dashboardStatsCache.get(dashboardActiveFilter);
-      } else {
-        panel.innerHTML = `<div style="font-weight:bold; font-size:16px; margin-bottom:8px; flex-shrink:0;">📊 Mes stats</div><div style="opacity:0.6;">Chargement…</div>`;
-        allStats = await GeoCompanion.stats.getAllCountryStats(playerName, dashboardActiveFilter);
-        dashboardStatsCache.set(dashboardActiveFilter, allStats);
-      }
-
-      const currentPanel = document.getElementById(DASHBOARD_ID);
-      if (!currentPanel) return; // page quittée entre-temps
-
-      currentPanel.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-shrink:0;">
-          <div style="font-weight:bold; font-size:16px;">📊 Mes stats</div>
-          <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" style="
-            background:#3a2020; border:none; color:#ff6b6b; cursor:pointer;
-            font-size:13px; padding:4px 8px; border-radius:6px;
-          ">🗑️</button>
-        </div>
-        <div style="display:flex; gap:4px; margin-bottom:8px; flex-shrink:0;">
-          ${FILTERS.map(
-            (f) => `
-            <button data-dash-filter="${f.key}" style="
-              flex:1; padding:4px 0; border-radius:6px; border:none; cursor:pointer;
-              background:${f.key === dashboardActiveFilter ? '#4a9eff' : '#33334a'};
-              color:white; font-size:11px; font-weight:600;
-            ">${f.label}</button>
-          `
-          ).join('')}
-        </div>
-        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:10px; flex-shrink:0;">
-          ${CONTINENT_ORDER.map(
-            (c) => `
-            <button data-dash-continent="${c}" style="
-              padding:6px 10px; border-radius:6px; border:none; cursor:pointer;
-              background:${c === dashboardActiveContinent ? '#4a9eff' : '#33334a'};
-              color:white; font-size:12px;
-            ">${CONTINENT_LABELS[c]}</button>
-          `
-          ).join('')}
-        </div>
-        <div id="geo-companion-dashboard-list" style="flex:1; overflow-y:auto; min-height:0;"></div>
-      `;
-
-      const deleteBtn = currentPanel.querySelector('#geo-companion-dashboard-delete-btn');
-      deleteBtn.addEventListener('click', async () => {
-        const filterMeta = FILTERS.find((f) => f.key === dashboardActiveFilter);
-        const periodLabel =
-          dashboardActiveFilter === 'all' ? 'TOUT ton historique de rounds' : `tes rounds des dernières ${filterMeta.label}`;
-
-        const confirmed = confirm(
-          `Supprimer ${periodLabel} ? Cette action est irréversible.`
-        );
-        if (!confirmed) return;
-
-        deleteBtn.disabled = true;
-        deleteBtn.textContent = '⏳';
-
-        const ok = await GeoCompanion.stats.deleteRoundsForPlayer(playerName, dashboardActiveFilter);
-        if (ok) {
-          console.log('[GeoCompanion] 🗑️ Rounds supprimés pour la période :', dashboardActiveFilter);
-          dashboardStatsCache.clear();
-          await renderDashboard();
-        } else {
-          alert('Erreur lors de la suppression — vérifie la console pour le détail.');
-          deleteBtn.disabled = false;
-          deleteBtn.textContent = '🗑️';
-        }
-      });
-
-      currentPanel.querySelectorAll('[data-dash-filter]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          dashboardActiveFilter = btn.dataset.dashFilter;
-          renderDashboard();
-        });
-      });
-      currentPanel.querySelectorAll('[data-dash-continent]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          dashboardActiveContinent = btn.dataset.dashContinent;
-          renderDashboard();
-        });
-      });
-
-      const listEl = currentPanel.querySelector('#geo-companion-dashboard-list');
       const allCodesForContinent = COUNTRIES_BY_CONTINENT[dashboardActiveContinent] || [];
       const countries = allCodesForContinent
         .map((code) => ({
@@ -1956,6 +1947,150 @@
             .join('')}
         </div>
       `;
+    }
+
+    // Affiche l'état vide + bouton "Actualiser" : aucune requête Supabase
+    // n'est envoyée tant que l'utilisateur n'a pas cliqué dessus.
+    // Charge les données pour le filtre courant : depuis le cache si déjà
+    // disponible, sinon depuis Supabase (seul cas qui déclenche une requête
+    // réseau). Réutilisé par le bouton "Actualiser" et par les boutons de
+    // filtre temporel (qui appellent explicitement une nouvelle période).
+    async function loadDashboardFilterData(playerName) {
+      if (!playerName) return;
+      if (dashboardStatsCache.has(dashboardActiveFilter)) {
+        renderDashboardCountryList(dashboardStatsCache.get(dashboardActiveFilter));
+        return;
+      }
+      const listEl = document.getElementById('geo-companion-dashboard-list');
+      if (listEl) listEl.innerHTML = `<div style="opacity:0.6; font-size:13px;">Chargement…</div>`;
+
+      const allStats = await GeoCompanion.stats.getAllCountryStats(playerName, dashboardActiveFilter);
+      dashboardStatsCache.set(dashboardActiveFilter, allStats);
+
+      // le DOM a pu changer entre-temps (continent/filtre recliqué pendant le chargement)
+      const currentListEl = document.getElementById('geo-companion-dashboard-list');
+      if (currentListEl) renderDashboardCountryList(allStats);
+    }
+
+    function renderDashboardEmptyState(playerName) {
+      const listEl = document.getElementById('geo-companion-dashboard-list');
+      if (!listEl) return;
+
+      listEl.innerHTML = `
+        <div style="text-align:center; padding:24px 0; opacity:0.75;">
+          <div style="margin-bottom:10px; font-size:13px;">Aucune donnée chargée pour cette période.</div>
+          <button id="geo-companion-dashboard-refresh-btn" style="
+            padding:8px 16px; border-radius:8px; border:none; cursor:pointer;
+            background:var(--gc-accent-gradient); color:white; font-size:13px; font-weight:600;
+          ">🔄 Actualiser</button>
+        </div>
+      `;
+
+      const refreshBtn = listEl.querySelector('#geo-companion-dashboard-refresh-btn');
+      refreshBtn.addEventListener('click', async () => {
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = '⏳';
+        await loadDashboardFilterData(playerName);
+      });
+    }
+
+    function renderDashboard() {
+      const panel = ensureDashboard();
+      const playerName = GeoCompanion.getPlayerName();
+
+      panel.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-shrink:0;">
+          <div style="font-weight:bold; font-size:16px;">📊 Mes stats</div>
+          <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" style="
+            background:var(--gc-danger-bg); border:none; color:var(--gc-danger); cursor:pointer;
+            font-size:13px; padding:4px 8px; border-radius:6px;
+          ">🗑️</button>
+        </div>
+        <div style="display:flex; gap:4px; margin-bottom:8px; flex-shrink:0;">
+          ${FILTERS.map(
+            (f) => `
+            <button data-dash-filter="${f.key}" style="
+              flex:1; padding:4px 0; border-radius:6px; border:none; cursor:pointer;
+              background:${f.key === dashboardActiveFilter ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'};
+              color:white; font-size:11px; font-weight:600;
+            ">${f.label}</button>
+          `
+          ).join('')}
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:10px; flex-shrink:0;">
+          ${CONTINENT_ORDER.map(
+            (c) => `
+            <button data-dash-continent="${c}" style="
+              padding:6px 10px; border-radius:6px; border:none; cursor:pointer;
+              background:${c === dashboardActiveContinent ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'};
+              color:white; font-size:12px;
+            ">${CONTINENT_LABELS[c]}</button>
+          `
+          ).join('')}
+        </div>
+        <div id="geo-companion-dashboard-list" style="flex:1; overflow-y:auto; min-height:0;"></div>
+      `;
+
+      const deleteBtn = panel.querySelector('#geo-companion-dashboard-delete-btn');
+      deleteBtn.addEventListener('click', async () => {
+        const filterMeta = FILTERS.find((f) => f.key === dashboardActiveFilter);
+        const periodLabel =
+          dashboardActiveFilter === 'all' ? 'TOUT ton historique de rounds' : `tes rounds des dernières ${filterMeta.label}`;
+
+        const confirmed = confirm(
+          `Supprimer ${periodLabel} ? Cette action est irréversible.`
+        );
+        if (!confirmed) return;
+
+        deleteBtn.disabled = true;
+        deleteBtn.textContent = '⏳';
+
+        const ok = await GeoCompanion.stats.deleteRoundsForPlayer(playerName, dashboardActiveFilter);
+        if (ok) {
+          console.log('[GeoCompanion] 🗑️ Rounds supprimés pour la période :', dashboardActiveFilter);
+          dashboardStatsCache.clear();
+          renderDashboardEmptyState(playerName); // la donnée vient de changer, on ne réaffiche pas l'ancien cache
+          deleteBtn.disabled = false;
+          deleteBtn.textContent = '🗑️';
+        } else {
+          GeoCompanion.notify('Erreur lors de la suppression des rounds', 'error');
+          deleteBtn.disabled = false;
+          deleteBtn.textContent = '🗑️';
+        }
+      });
+
+      panel.querySelectorAll('[data-dash-filter]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          dashboardActiveFilter = btn.dataset.dashFilter;
+          renderDashboard();
+          // Un clic sur un filtre est une demande explicite pour cette
+          // période : on charge depuis le cache s'il existe, sinon on va
+          // chercher sur Supabase — contrairement au changement de continent
+          // (passif, ne déclenche jamais de requête).
+          loadDashboardFilterData(playerName);
+        });
+      });
+      panel.querySelectorAll('[data-dash-continent]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          dashboardActiveContinent = btn.dataset.dashContinent;
+          renderDashboard();
+        });
+      });
+
+      if (!playerName) {
+        const listEl = panel.querySelector('#geo-companion-dashboard-list');
+        listEl.innerHTML = `<div style="opacity:0.6; font-size:13px;">Identification du joueur en cours…</div>`;
+        return;
+      }
+
+      // Aucune requête Supabase envoyée ici : on affiche le cache s'il existe
+      // pour ce filtre, sinon un état vide avec bouton "Actualiser" — c'est
+      // le clic sur ce bouton qui déclenche la seule requête réseau.
+      if (dashboardStatsCache.has(dashboardActiveFilter)) {
+        renderDashboardCountryList(dashboardStatsCache.get(dashboardActiveFilter));
+      } else {
+        renderDashboardEmptyState(playerName);
+      }
     }
 
     function checkHomepage() {

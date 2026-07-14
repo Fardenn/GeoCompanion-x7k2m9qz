@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      2.21
+// @version      4.6
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -385,6 +385,30 @@
         return false;
       }
     },
+
+    // suppression par filtre PostgREST (ex: "player_name=eq.X&played_at=gte....")
+    // plutôt que par id unique — utilisé pour les suppressions en masse.
+    async removeWhere(table, query) {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
+          method: 'DELETE',
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+            Prefer: 'return=minimal',
+          },
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          console.error(`[GeoCompanion] Erreur delete Supabase (${table}) :`, res.status, text);
+          return false;
+        }
+        return true;
+      } catch (e) {
+        console.error(`[GeoCompanion] Exception delete Supabase (${table}) :`, e);
+        return false;
+      }
+    },
   };
 
   GeoCompanion.supabase = supabaseClient;
@@ -475,6 +499,37 @@
     if (!code) return null;
     return CONTINENT_BY_COUNTRY[code.toUpperCase()] || null;
   }
+
+  // Inverse de CONTINENT_BY_COUNTRY : liste de tous les codes pays connus
+  // pour un continent donné (utilisé pour afficher la liste complète des
+  // pays, y compris ceux jamais joués).
+  const COUNTRIES_BY_CONTINENT = (() => {
+    const grouped = {};
+    for (const [code, continent] of Object.entries(CONTINENT_BY_COUNTRY)) {
+      if (!grouped[continent]) grouped[continent] = [];
+      grouped[continent].push(code);
+    }
+    return grouped;
+  })();
+
+  // Pays ayant une couverture Google Street View connue (donc susceptibles
+  // d'apparaître réellement dans une partie GeoGuessr). Best-effort, basé
+  // sur une source communautaire mise à jour mensuellement — la couverture
+  // évolue avec le temps, cette liste peut donc devenir légèrement datée.
+  // Utilisé uniquement pour filtrer les pays "jamais joués" affichés dans
+  // le dashboard (un round réellement enregistré s'affiche toujours, quelle
+  // que soit cette liste — CONTINENT_BY_COUNTRY reste complet pour ça).
+  const STREETVIEW_COVERED_COUNTRIES = new Set([
+    'AX', 'AL', 'AS', 'AD', 'AR', 'AU', 'AT', 'BD', 'BY', 'BE', 'BM', 'BT', 'BO', 'BA', 'BW',
+    'BR', 'BG', 'KH', 'CA', 'CL', 'CN', 'CO', 'CR', 'HR', 'CW', 'CY', 'CZ', 'DK', 'DO', 'EC',
+    'EG', 'EE', 'SZ', 'FK', 'FO', 'FI', 'FR', 'DE', 'GH', 'GI', 'GR', 'GL', 'GU', 'GT', 'HK',
+    'HU', 'IS', 'IN', 'ID', 'IQ', 'IE', 'IM', 'IL', 'IT', 'JP', 'JE', 'JO', 'KZ', 'KE', 'KG',
+    'LA', 'LV', 'LB', 'LS', 'LI', 'LT', 'LU', 'MO', 'MG', 'MY', 'ML', 'MT', 'MX', 'MC', 'MN',
+    'ME', 'NA', 'NP', 'NL', 'NZ', 'NG', 'MK', 'MP', 'NO', 'OM', 'PK', 'PS', 'PA', 'PY', 'PE',
+    'PH', 'PL', 'PT', 'PR', 'QA', 'RO', 'RU', 'RW', 'SM', 'SN', 'RS', 'SG', 'SK', 'SI', 'ZA',
+    'KR', 'ES', 'LK', 'SE', 'CH', 'TW', 'TZ', 'TH', 'TN', 'TR', 'UG', 'UA', 'AE', 'GB', 'US',
+    'UY', 'VU', 'VN', 'VI',
+  ]);
 
   // ============================================================
   // MODULE: roundHistory
@@ -683,7 +738,64 @@
         .sort((a, b) => (b.avgScore ?? -1) - (a.avgScore ?? -1));
     }
 
-    GeoCompanion.stats = { getCountryStats, getContinentStats, getMapStats, getPlayerComparison };
+    // Stats groupées par pays (avec leur continent) pour un joueur donné —
+    // utilisé par le dashboard sur la page d'accueil. Filtré par joueur car
+    // c'est un outil de progression personnelle (voir tes propres points
+    // faibles), la comparaison entre joueurs existe déjà par ailleurs.
+    async function getAllCountryStats(playerName, filterKey = 'all') {
+      const query = `select=country_code,continent,score,country_correct&player_name=eq.${encodeURIComponent(
+        playerName
+      )}${sinceClauseFor(filterKey)}`;
+      const rows = await supabaseClient.select('rounds', query);
+      if (!rows) return {};
+
+      const byCountry = {};
+      for (const r of rows) {
+        if (!r.country_code) continue;
+        const code = r.country_code.toUpperCase(); // normalisation pour matcher COUNTRIES_BY_CONTINENT
+        if (!byCountry[code]) {
+          // Fallback : les rounds enregistrés avant l'ajout de la colonne
+          // "continent" l'ont à null en base — on le recalcule à la volée
+          // dans ce cas plutôt que de les perdre.
+          const continent = r.continent || continentFromCountryCode(code);
+          byCountry[code] = { continent, scores: [], corrects: [] };
+        }
+        if (r.score != null) byCountry[code].scores.push(r.score);
+        if (r.country_correct != null) byCountry[code].corrects.push(r.country_correct);
+      }
+
+      const result = {};
+      for (const [code, data] of Object.entries(byCountry)) {
+        result[code] = {
+          continent: data.continent,
+          count: data.scores.length,
+          avgScore: data.scores.length
+            ? Math.round(data.scores.reduce((a, b) => a + b, 0) / data.scores.length)
+            : null,
+          successRate: data.corrects.length
+            ? Math.round((data.corrects.filter(Boolean).length / data.corrects.length) * 100)
+            : null,
+        };
+      }
+      return result;
+    }
+
+    // Supprime les rounds d'un joueur correspondant au filtre temporel donné
+    // (même logique de date que les stats — filterKey 'all' supprime tout
+    // l'historique du joueur, sans restriction de date).
+    async function deleteRoundsForPlayer(playerName, filterKey = 'all') {
+      const query = `player_name=eq.${encodeURIComponent(playerName)}${sinceClauseFor(filterKey)}`;
+      return supabaseClient.removeWhere('rounds', query);
+    }
+
+    GeoCompanion.stats = {
+      getCountryStats,
+      getContinentStats,
+      getMapStats,
+      getPlayerComparison,
+      getAllCountryStats,
+      deleteRoundsForPlayer,
+    };
   })();
 
   // ============================================================
@@ -737,53 +849,48 @@
   // ============================================================
   // MODULE: countryInfo
   // ------------------------------------------------------------
-  // Sens de circulation par pays. Une estimation par défaut est
-  // fournie (connaissance générale, pas garantie fiable à 100%),
-  // et peut être corrigée manuellement — la correction est alors
-  // stockée dans Supabase (table country_info) et prime sur
-  // l'estimation par défaut pour tout le monde.
+  // ============================================================
+  // MODULE: countryInfo
+  // ------------------------------------------------------------
+  // Métadonnées par pays : sens de circulation, langue, plaque/
+  // bollard/poteau (photos) et voiture (texte), tous modifiables
+  // manuellement. Les valeurs de base (sens de circulation, indices
+  // de langue) sont pré-remplies directement dans Supabase via un
+  // script SQL de seed (pas de liste codée en dur ici) — voir
+  // supabase-country-info-seed.sql. Toute correction manuelle prime
+  // et n'est jamais écrasée par un futur seed (ON CONFLICT + COALESCE).
   // ============================================================
   (function countryInfoModule() {
-    // Pays roulant à gauche (liste best-effort). Tout pays absent de cette
-    // liste est supposé rouler à droite par défaut.
-    const LEFT_HAND_TRAFFIC = new Set([
-      'AU', 'BD', 'BS', 'BB', 'BN', 'BT', 'BW', 'CY', 'DM', 'FJ', 'GB', 'GD', 'GG',
-      'GY', 'HK', 'ID', 'IE', 'IM', 'IN', 'JE', 'JM', 'JP', 'KE', 'KI', 'KN', 'LC',
-      'LK', 'LS', 'MO', 'MT', 'MU', 'MV', 'MW', 'MY', 'MZ', 'NA', 'NP', 'NR', 'NZ',
-      'PG', 'PK', 'SB', 'SC', 'SG', 'SR', 'SZ', 'TH', 'TL', 'TO', 'TT', 'TV', 'TZ',
-      'UG', 'VC', 'WS', 'ZA', 'ZM', 'ZW', 'BM', 'KY', 'VG', 'VI', 'TC', 'AI', 'MS',
-      'FK', 'SH',
-    ]);
-
-    function defaultDrivingSide(countryCode) {
-      if (!countryCode) return null;
-      return LEFT_HAND_TRAFFIC.has(countryCode.toUpperCase()) ? 'left' : 'right';
-    }
-
-    // Retourne { side: 'left'|'right'|null, isOverride: bool }
-    async function getDrivingSide(countryCode) {
-      if (!countryCode) return { side: null, isOverride: false };
+    // Retourne toutes les métadonnées d'un pays en une seule requête,
+    // telles que stockées en base (valeurs déjà seedées ou corrigées).
+    async function getCountryInfo(countryCode) {
+      if (!countryCode) return {};
       const upper = countryCode.toUpperCase();
       const rows = await supabaseClient.select(
         'country_info',
-        `select=driving_side&country_code=eq.${upper}`
+        `select=driving_side,plaque_image_url,bollard_image_url,poteau_image_url,voiture_text,voiture_image_url,voiture_exclusive,langue_text&country_code=eq.${upper}`
       );
-      if (rows && rows.length > 0 && rows[0].driving_side) {
-        return { side: rows[0].driving_side, isOverride: true };
-      }
-      return { side: defaultDrivingSide(upper), isOverride: false };
+      return (rows && rows[0]) || {};
     }
 
-    async function setDrivingSide(countryCode, side) {
-      if (!countryCode || !['left', 'right'].includes(side)) return false;
+    // Setter multi-champs : sauvegarde plusieurs colonnes de country_info
+    // en un seul appel (utile pour les champs composites comme "voiture").
+    async function setCountryInfoFields(countryCode, fields) {
+      if (!countryCode) return false;
       return supabaseClient.insert(
         'country_info',
-        { country_code: countryCode.toUpperCase(), driving_side: side, updated_at: new Date().toISOString() },
+        { country_code: countryCode.toUpperCase(), ...fields, updated_at: new Date().toISOString() },
         { merge: true }
       );
     }
 
-    GeoCompanion.countryInfo = { getDrivingSide, setDrivingSide };
+    // Setter pour un seul champ (raccourci autour de setCountryInfoFields).
+    async function setCountryInfoField(countryCode, field, value) {
+      if (!field) return false;
+      return setCountryInfoFields(countryCode, { [field]: value });
+    }
+
+    GeoCompanion.countryInfo = { getCountryInfo, setCountryInfoField, setCountryInfoFields };
   })();
 
   // ============================================================
@@ -818,6 +925,30 @@
       } catch (e) {
         return code;
       }
+    }
+
+    // Noms raccourcis pour les affichages compacts (ex: dashboard en grille
+    // serrée) — seuls les noms français les plus longs sont couverts.
+    const SHORT_COUNTRY_NAMES = {
+      AE: 'Émirats A.U.',
+      BA: 'Bosnie-Herz.',
+      CZ: 'Tchéquie',
+      DO: 'Rép. dominicaine',
+      HK: 'Hong Kong',
+      KP: 'Corée du Nord',
+      KR: 'Corée du Sud',
+      MK: 'Macédoine N.',
+      MO: 'Macao',
+      MP: 'Îles Mariannes N.',
+      PS: 'Palestine',
+      TT: 'Trinité-Tobago',
+      VG: 'Îles Vierges brit.',
+      VI: 'Îles Vierges US',
+      ZA: 'Afrique du Sud',
+    };
+
+    function shortCountryName(code) {
+      return SHORT_COUNTRY_NAMES[code.toUpperCase()] || countryNameFromCode(code);
     }
 
     // Domaine internet (ccTLD) du pays. Dans la grande majorité des cas, ça
@@ -910,9 +1041,9 @@
           position: fixed;
           top: 20px;
           left: 20px;
-          width: 400px;
-          max-width: 33vw;
-          height: 80vh;
+          width: 480px;
+          max-width: 38vw;
+          height: 85vh;
           display: flex;
           flex-direction: column;
           background: #1e1e2e;
@@ -926,6 +1057,14 @@
           line-height: 1.4;
         `;
         document.body.appendChild(panel);
+
+        // Listener délégué unique (le panneau persiste entre les re-renders) :
+        // clique sur n'importe quelle image marquée data-lightbox pour la
+        // voir en taille réelle.
+        panel.addEventListener('click', (e) => {
+          const img = e.target.closest('img[data-lightbox]');
+          if (img) openImageLightbox(img.src);
+        });
       }
       return panel;
     }
@@ -1092,6 +1231,19 @@
       return div.innerHTML;
     }
 
+    // Affiche une image en grand par-dessus tout le reste (clic pour fermer).
+    function openImageLightbox(url) {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 9999999; cursor: zoom-out;
+      `;
+      overlay.innerHTML = `<img src="${url}" style="max-width:90vw; max-height:90vh; border-radius:8px; box-shadow:0 8px 40px rgba(0,0,0,0.6);">`;
+      overlay.addEventListener('click', () => overlay.remove());
+      document.body.appendChild(overlay);
+    }
+
     function tipHtml(tip) {
       const buttonsHtml = `
         <button data-edit-tip="${tip.id}" style="background:rgba(0,0,0,0.55); border:none; color:#4a9eff; cursor:pointer; font-size:16px; padding:4px 6px; border-radius:5px;" title="Modifier">✏️</button>
@@ -1099,13 +1251,13 @@
       `;
 
       return `
-        <div style="background:#2a2a3d; border-radius:8px; padding:6px 8px; margin-bottom:6px; font-size:16px;">
+        <div style="background:#2a2a3d; border-radius:8px; padding:6px 8px; font-size:16px;">
           ${tip.content ? `<div style="margin-bottom:4px; white-space:pre-wrap; font-size:18px;">${escapeHtml(tip.content)}</div>` : ''}
           ${
             tip.image_url
               ? `
                 <div style="position:relative; margin-bottom:2px;">
-                  <img src="${tip.image_url}" style="width:100%; max-height:200px; object-fit:contain; border-radius:5px; background:#111; display:block;">
+                  <img data-lightbox="true" src="${tip.image_url}" style="width:100%; max-height:300px; object-fit:contain; border-radius:5px; background:#111; display:block; cursor:zoom-in;">
                   <div style="position:absolute; top:4px; right:4px; display:flex; gap:4px;">${buttonsHtml}</div>
                 </div>
               `
@@ -1169,7 +1321,7 @@
 
       const plonkitUrl = plonkitUrlFromCode(row.country_code);
       const tld = tldFromCode(row.country_code);
-      const drivingInfo = await GeoCompanion.countryInfo.getDrivingSide(row.country_code);
+      const info = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
 
       tipsPanel.innerHTML = `
         <div style="font-weight:bold; font-size:22px; margin-bottom:6px; flex-shrink:0;">
@@ -1183,11 +1335,13 @@
           <span>🌐 ${tld || '-'}</span>
           <span id="geo-companion-driving-side"></span>
         </div>
+        <div id="geo-companion-country-fields" style="margin-bottom:6px; flex-shrink:0;"></div>
+        <div id="geo-companion-voiture-field" style="margin-bottom:10px; flex-shrink:0;"></div>
         <div id="geo-companion-tips-list" style="flex:1; overflow-y:auto; min-height:0;">
           ${
             tips.length === 0
               ? `<div style="opacity:0.6; font-size:16px;">Aucun tip pour ce pays pour l'instant.</div>`
-              : tips.map(tipHtml).join('')
+              : `<div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">${tips.map(tipHtml).join('')}</div>`
           }
         </div>
         <button id="geo-companion-add-tip-btn" style="
@@ -1197,7 +1351,9 @@
         <div id="geo-companion-tip-form" style="flex-shrink:0;"></div>
       `;
 
-      renderDrivingSide(tipsPanel, row, drivingInfo);
+      renderDrivingSide(tipsPanel, row, info.driving_side);
+      renderCountryInfoFields(tipsPanel, row, info);
+      renderVoitureField(tipsPanel, row, info);
 
       tipsPanel.querySelectorAll('[data-edit-tip]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -1224,31 +1380,235 @@
       return 'Inconnu';
     }
 
-    function renderDrivingSide(tipsPanel, row, info) {
+    function renderDrivingSide(tipsPanel, row, side) {
       const container = tipsPanel.querySelector('#geo-companion-driving-side');
       if (!container) return;
 
       container.innerHTML = `
-        <span>🚗 ${drivingSideLabel(info.side)}${info.isOverride ? '' : ' (estimé)'}</span>
+        <span>🚗 ${drivingSideLabel(side)}</span>
         <button data-edit-driving style="background:none; border:none; color:#4a9eff; cursor:pointer; font-size:15px;" title="Corriger">✏️</button>
       `;
 
       container.querySelector('[data-edit-driving]').addEventListener('click', () => {
         container.innerHTML = `
           <button data-side="left" style="padding:3px 6px; border-radius:5px; border:none; cursor:pointer; background:${
-            info.side === 'left' ? '#4a9eff' : '#33334a'
+            side === 'left' ? '#4a9eff' : '#33334a'
           }; color:white; font-size:11px;">⬅️ Gauche</button>
           <button data-side="right" style="padding:3px 6px; border-radius:5px; border:none; cursor:pointer; background:${
-            info.side === 'right' ? '#4a9eff' : '#33334a'
+            side === 'right' ? '#4a9eff' : '#33334a'
           }; color:white; font-size:11px;">➡️ Droite</button>
         `;
 
         container.querySelectorAll('[data-side]').forEach((btn) => {
           btn.addEventListener('click', async () => {
-            await GeoCompanion.countryInfo.setDrivingSide(row.country_code, btn.dataset.side);
-            const updated = await GeoCompanion.countryInfo.getDrivingSide(row.country_code);
-            renderDrivingSide(tipsPanel, row, updated);
+            await GeoCompanion.countryInfo.setCountryInfoField(row.country_code, 'driving_side', btn.dataset.side);
+            const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
+            renderDrivingSide(tipsPanel, row, updated.driving_side);
           });
+        });
+      });
+    }
+
+    // Champs d'identification par pays : plaque/bollard/poteau (photos) et
+    // langue (texte). "Voiture" a son propre rendu composite juste en
+    // dessous (texte + image + case "exclusif au pays").
+    const COUNTRY_INFO_FIELDS = [
+      { key: 'plaque_image_url', label: 'Plaque', type: 'image' },
+      { key: 'bollard_image_url', label: 'Bollard', type: 'image' },
+      { key: 'poteau_image_url', label: 'Poteau/Panneau', type: 'images', fullWidth: true },
+      { key: 'langue_text', label: 'Langue', type: 'text', fullWidth: true },
+    ];
+
+    function countryInfoFieldDisplay(fieldConfig, value) {
+      if (!value) {
+        return `<span style="opacity:0.45;">Non renseigné</span>`;
+      }
+      if (fieldConfig.type === 'image') {
+        return `<img data-lightbox="true" src="${value}" style="max-height:98px; max-width:100%; border-radius:4px; display:block; margin-top:2px; background:#111; cursor:zoom-in;">`;
+      }
+      if (fieldConfig.type === 'images') {
+        const urls = value
+          .split('\n')
+          .map((u) => u.trim())
+          .filter(Boolean);
+        if (urls.length === 0) return `<span style="opacity:0.45;">Non renseigné</span>`;
+        return `
+          <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:2px;">
+            ${urls
+              .map(
+                (u) =>
+                  `<img data-lightbox="true" src="${u}" style="height:98px; width:auto; max-width:100%; border-radius:4px; background:#111; cursor:zoom-in;">`
+              )
+              .join('')}
+          </div>
+        `;
+      }
+      return `<span style="${
+        fieldConfig.key === 'langue_text' ? 'font-weight:bold; font-size:22px;' : ''
+      }">${escapeHtml(value)}</span>`;
+    }
+
+    function renderCountryInfoFields(tipsPanel, row, info) {
+      const container = tipsPanel.querySelector('#geo-companion-country-fields');
+      if (!container) return;
+
+      container.innerHTML = `
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+          ${COUNTRY_INFO_FIELDS.map(
+            (f) => `
+            <div style="${f.fullWidth ? 'grid-column:1 / span 2;' : ''} background:#2a2a3d; border-radius:6px; padding:7px 9px; font-size:15px;">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="opacity:0.75; font-weight:700; font-size:15px;">${f.label}</span>
+                <button data-edit-field="${f.key}" style="background:none; border:none; color:#4a9eff; cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
+              </div>
+              <div data-field-display="${f.key}" style="margin-top:2px;">${countryInfoFieldDisplay(
+                f,
+                info[f.key]
+              )}</div>
+              <div data-field-form="${f.key}"></div>
+            </div>
+          `
+          ).join('')}
+        </div>
+      `;
+
+      container.querySelectorAll('[data-edit-field]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const key = btn.dataset.editField;
+          const fieldConfig = COUNTRY_INFO_FIELDS.find((f) => f.key === key);
+          const formEl = container.querySelector(`[data-field-form="${key}"]`);
+          const currentValue = info[key] || '';
+          const isMulti = fieldConfig.type === 'images';
+
+          formEl.innerHTML = isMulti
+            ? `
+              <textarea placeholder="Une URL d'image par ligne" style="
+                width:100%; min-height:60px; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
+                background:#1a1a28; color:white; font-size:15px; font-family:inherit; resize:vertical;
+              ">${escapeHtml(currentValue)}</textarea>
+              <div style="display:flex; gap:4px; margin-top:4px;">
+                <button data-save-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#4a9eff; color:white; font-size:13px;">OK</button>
+                <button data-cancel-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#33334a; color:white; font-size:13px;">Annuler</button>
+              </div>
+            `
+            : `
+              <input type="text" value="${escapeHtml(currentValue)}" placeholder="${
+                fieldConfig.type === 'image' ? "URL de l'image" : 'Texte'
+              }" style="
+                width:100%; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
+                background:#1a1a28; color:white; font-size:15px;
+              ">
+              <div style="display:flex; gap:4px; margin-top:4px;">
+                <button data-save-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#4a9eff; color:white; font-size:13px;">OK</button>
+                <button data-cancel-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#33334a; color:white; font-size:13px;">Annuler</button>
+              </div>
+            `;
+
+          const inputEl = formEl.querySelector(isMulti ? 'textarea' : 'input');
+          stopKeyPropagation(inputEl);
+
+          formEl.querySelector('[data-cancel-field]').addEventListener('click', () => {
+            formEl.innerHTML = '';
+          });
+
+          formEl.querySelector('[data-save-field]').addEventListener('click', async () => {
+            const value = isMulti
+              ? inputEl.value
+                  .split('\n')
+                  .map((u) => u.trim())
+                  .filter(Boolean)
+                  .join('\n')
+              : inputEl.value.trim();
+            await GeoCompanion.countryInfo.setCountryInfoField(row.country_code, key, value || null);
+            const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
+            renderCountryInfoFields(tipsPanel, row, updated);
+          });
+        });
+      });
+    }
+
+    // Champ "Voiture" composite : texte + image + case "exclusif au pays".
+    // Séparé du système générique car il combine 3 colonnes en une carte.
+    function renderVoitureField(tipsPanel, row, info) {
+      const container = tipsPanel.querySelector('#geo-companion-voiture-field');
+      if (!container) return;
+
+      const hasContent = info.voiture_text || info.voiture_image_url;
+      const exclusiveBadge =
+        info.voiture_exclusive === true
+          ? '<span style="opacity:0.8;">🔒 Exclusif au pays</span>'
+          : info.voiture_exclusive === false
+          ? '<span style="opacity:0.5;">🌍 Non exclusif</span>'
+          : '';
+
+      container.innerHTML = `
+        <div style="background:#2a2a3d; border-radius:6px; padding:7px 9px; font-size:15px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span style="opacity:0.75; font-weight:700; font-size:15px;">Voiture</span>
+            <button data-edit-voiture style="background:none; border:none; color:#4a9eff; cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
+          </div>
+          <div data-voiture-display style="margin-top:2px;">
+            ${
+              hasContent
+                ? `
+              ${info.voiture_text ? `<div>${escapeHtml(info.voiture_text)}</div>` : ''}
+              ${
+                info.voiture_image_url
+                  ? `<img data-lightbox="true" src="${info.voiture_image_url}" style="max-height:98px; max-width:100%; border-radius:4px; display:block; margin-top:4px; background:#111; cursor:zoom-in;">`
+                  : ''
+              }
+              ${exclusiveBadge ? `<div style="margin-top:4px; font-size:13px;">${exclusiveBadge}</div>` : ''}
+            `
+                : '<span style="opacity:0.45;">Non renseigné</span>'
+            }
+          </div>
+          <div data-voiture-form></div>
+        </div>
+      `;
+
+      container.querySelector('[data-edit-voiture]').addEventListener('click', () => {
+        const formEl = container.querySelector('[data-voiture-form]');
+        formEl.innerHTML = `
+          <input type="text" data-voiture-text value="${escapeHtml(
+            info.voiture_text || ''
+          )}" placeholder="Texte (marque, modèle...)" style="
+            width:100%; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
+            background:#1a1a28; color:white; font-size:15px;
+          ">
+          <input type="text" data-voiture-image value="${escapeHtml(
+            info.voiture_image_url || ''
+          )}" placeholder="URL de l'image (optionnel)" style="
+            width:100%; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
+            background:#1a1a28; color:white; font-size:15px;
+          ">
+          <label style="display:flex; align-items:center; gap:6px; margin-top:6px; font-size:13px; cursor:pointer;">
+            <input type="checkbox" data-voiture-exclusive ${info.voiture_exclusive ? 'checked' : ''}>
+            Exclusif au pays
+          </label>
+          <div style="display:flex; gap:4px; margin-top:6px;">
+            <button data-save-voiture style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#4a9eff; color:white; font-size:13px;">OK</button>
+            <button data-cancel-voiture style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#33334a; color:white; font-size:13px;">Annuler</button>
+          </div>
+        `;
+
+        const textEl = formEl.querySelector('[data-voiture-text]');
+        const imageEl = formEl.querySelector('[data-voiture-image]');
+        stopKeyPropagation(textEl);
+        stopKeyPropagation(imageEl);
+
+        formEl.querySelector('[data-cancel-voiture]').addEventListener('click', () => {
+          formEl.innerHTML = '';
+        });
+
+        formEl.querySelector('[data-save-voiture]').addEventListener('click', async () => {
+          const exclusiveEl = formEl.querySelector('[data-voiture-exclusive]');
+          await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, {
+            voiture_text: textEl.value.trim() || null,
+            voiture_image_url: imageEl.value.trim() || null,
+            voiture_exclusive: exclusiveEl.checked,
+          });
+          const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
+          renderVoitureField(tipsPanel, row, updated);
         });
       });
     }
@@ -1260,6 +1620,251 @@
       await renderStats(row, 'all');
       await renderTips(row);
     });
+
+    // Les panneaux résultat/tips n'ont d'intérêt qu'une fois le round terminé
+    // (pays révélé) — on les retire au début du round suivant pour ne pas
+    // laisser les infos de l'ancien round affichées pendant qu'on joue.
+    GeoCompanion.on('roundStart', () => {
+      const panel = document.getElementById(PANEL_ID);
+      if (panel) panel.remove();
+      const tipsPanel = document.getElementById(TIPS_PANEL_ID);
+      if (tipsPanel) tipsPanel.remove();
+    });
+
+    // ==========================================================
+    // DASHBOARD (page d'accueil)
+    // ----------------------------------------------------------
+    // Récap perso par continent/pays, affiché uniquement sur la
+    // page d'accueil GeoGuessr (pas pendant une partie). GeoGuessr
+    // étant une SPA, on détecte les changements de route sans
+    // rechargement de page via un hook sur history.pushState.
+    // ==========================================================
+    const DASHBOARD_ID = 'geo-companion-dashboard';
+    const CONTINENT_ORDER = ['europe', 'asia', 'africa', 'north_america', 'south_america', 'oceania'];
+    let dashboardActiveContinent = CONTINENT_ORDER[0];
+    let dashboardActiveFilter = 'all';
+
+    function isHomepage() {
+      // Accueil GeoGuessr : "/" ou "/xx" (préfixe de langue), rien après.
+      return /^\/([a-z]{2})?\/?$/i.test(pageWindow.location.pathname);
+    }
+
+    function removeDashboard() {
+      const el = document.getElementById(DASHBOARD_ID);
+      if (el) el.remove();
+    }
+
+    function ensureDashboard() {
+      let panel = document.getElementById(DASHBOARD_ID);
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = DASHBOARD_ID;
+        panel.style.cssText = `
+          position: fixed;
+          top: 70px;
+          right: 300px;
+          width: 540px;
+          max-width: 45vw;
+          max-height: 63.5vh;
+          display: flex;
+          flex-direction: column;
+          background: #1e1e2e;
+          color: #f0f0f0;
+          border-radius: 12px;
+          padding: 12px;
+          font-family: -apple-system, sans-serif;
+          font-size: 14px;
+          z-index: 999999;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+          line-height: 1.4;
+        `;
+        document.body.appendChild(panel);
+      }
+      return panel;
+    }
+
+    // Couleur pleine (bordure) et lavée (fond) selon le taux de réussite :
+    // rouge (0%) -> vert (100%).
+    function successColor(rate) {
+      if (rate == null) return { solid: 'hsl(0, 0%, 45%)', wash: 'hsla(0, 0%, 45%, 0.15)' };
+      const hue = Math.round((rate / 100) * 120);
+      return { solid: `hsl(${hue}, 65%, 45%)`, wash: `hsla(${hue}, 65%, 45%, 0.18)` };
+    }
+
+    async function renderDashboard() {
+      const panel = ensureDashboard();
+      panel.innerHTML = `<div style="font-weight:bold; font-size:16px; margin-bottom:8px; flex-shrink:0;">📊 Mes stats</div><div style="opacity:0.6;">Chargement…</div>`;
+
+      const playerName = GeoCompanion.getPlayerName();
+      const allStats = playerName
+        ? await GeoCompanion.stats.getAllCountryStats(playerName, dashboardActiveFilter)
+        : {};
+
+      const currentPanel = document.getElementById(DASHBOARD_ID);
+      if (!currentPanel) return; // page quittée entre-temps
+
+      currentPanel.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-shrink:0;">
+          <div style="font-weight:bold; font-size:16px;">📊 Mes stats</div>
+          <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" style="
+            background:#3a2020; border:none; color:#ff6b6b; cursor:pointer;
+            font-size:13px; padding:4px 8px; border-radius:6px;
+          ">🗑️</button>
+        </div>
+        <div style="display:flex; gap:4px; margin-bottom:8px; flex-shrink:0;">
+          ${FILTERS.map(
+            (f) => `
+            <button data-dash-filter="${f.key}" style="
+              flex:1; padding:4px 0; border-radius:6px; border:none; cursor:pointer;
+              background:${f.key === dashboardActiveFilter ? '#4a9eff' : '#33334a'};
+              color:white; font-size:11px; font-weight:600;
+            ">${f.label}</button>
+          `
+          ).join('')}
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:10px; flex-shrink:0;">
+          ${CONTINENT_ORDER.map(
+            (c) => `
+            <button data-dash-continent="${c}" style="
+              padding:6px 10px; border-radius:6px; border:none; cursor:pointer;
+              background:${c === dashboardActiveContinent ? '#4a9eff' : '#33334a'};
+              color:white; font-size:12px;
+            ">${CONTINENT_LABELS[c]}</button>
+          `
+          ).join('')}
+        </div>
+        <div id="geo-companion-dashboard-list" style="flex:1; overflow-y:auto; min-height:0;"></div>
+      `;
+
+      const deleteBtn = currentPanel.querySelector('#geo-companion-dashboard-delete-btn');
+      deleteBtn.addEventListener('click', async () => {
+        const filterMeta = FILTERS.find((f) => f.key === dashboardActiveFilter);
+        const periodLabel =
+          dashboardActiveFilter === 'all' ? 'TOUT ton historique de rounds' : `tes rounds des dernières ${filterMeta.label}`;
+
+        const confirmed = confirm(
+          `Supprimer ${periodLabel} ? Cette action est irréversible.`
+        );
+        if (!confirmed) return;
+
+        deleteBtn.disabled = true;
+        deleteBtn.textContent = '⏳';
+
+        const ok = await GeoCompanion.stats.deleteRoundsForPlayer(playerName, dashboardActiveFilter);
+        if (ok) {
+          console.log('[GeoCompanion] 🗑️ Rounds supprimés pour la période :', dashboardActiveFilter);
+          await renderDashboard();
+        } else {
+          alert('Erreur lors de la suppression — vérifie la console pour le détail.');
+          deleteBtn.disabled = false;
+          deleteBtn.textContent = '🗑️';
+        }
+      });
+
+      currentPanel.querySelectorAll('[data-dash-filter]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          dashboardActiveFilter = btn.dataset.dashFilter;
+          renderDashboard();
+        });
+      });
+      currentPanel.querySelectorAll('[data-dash-continent]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          dashboardActiveContinent = btn.dataset.dashContinent;
+          renderDashboard();
+        });
+      });
+
+      const listEl = currentPanel.querySelector('#geo-companion-dashboard-list');
+      const allCodesForContinent = COUNTRIES_BY_CONTINENT[dashboardActiveContinent] || [];
+      const countries = allCodesForContinent
+        .map((code) => ({
+          code,
+          count: 0,
+          avgScore: null,
+          successRate: null,
+          ...allStats[code], // écrase les valeurs par défaut si des stats existent
+        }))
+        // un pays jamais joué n'a d'intérêt à afficher que s'il a une
+        // couverture Street View connue (sinon il n'apparaîtra jamais en
+        // jeu) — un pays réellement joué s'affiche toujours, les données
+        // réelles priment sur cette liste best-effort.
+        .filter((c) => c.count > 0 || STREETVIEW_COVERED_COUNTRIES.has(c.code))
+        .sort((a, b) => {
+          // pays joués d'abord (triés par taux de réussite décroissant), puis
+          // pays jamais joués, triés par nom.
+          if (a.count === 0 && b.count === 0) return countryNameFromCode(a.code).localeCompare(countryNameFromCode(b.code));
+          if (a.count === 0) return 1;
+          if (b.count === 0) return -1;
+          return (b.successRate ?? -1) - (a.successRate ?? -1);
+        });
+
+      if (countries.length === 0) {
+        listEl.innerHTML = `<div style="opacity:0.6; font-size:14px;">Aucun pays connu sur ce continent.</div>`;
+        return;
+      }
+
+      listEl.innerHTML = `
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px;">
+          ${countries
+            .map((c) => {
+              const color = successColor(c.successRate);
+              return `
+              <div style="
+                display:flex; justify-content:space-between; align-items:center; gap:6px;
+                padding:3px 10px; border-radius:6px; overflow:hidden;
+                background:${color.wash}; border-left:4px solid ${color.solid};
+              ">
+                <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${flagEmojiFromCode(
+                  c.code
+                )} ${shortCountryName(c.code)}</span>
+                <span style="font-size:12px; opacity:0.9; white-space:nowrap; flex-shrink:0;">
+                  ${c.count > 0 ? `${c.count} · ${c.successRate != null ? c.successRate + '%' : '-'}` : 'Jamais joué'}
+                </span>
+              </div>
+            `;
+            })
+            .join('')}
+        </div>
+      `;
+    }
+
+    function checkHomepage() {
+      if (isHomepage()) {
+        renderDashboard();
+      } else {
+        removeDashboard();
+      }
+    }
+
+    // Filet de sécurité indépendant du routing : dès qu'une partie démarre
+    // (détecté de façon fiable via l'interception réseau, pas via l'URL),
+    // on masque le dashboard directement.
+    GeoCompanion.on('gameStart', removeDashboard);
+
+    // Détection de navigation SPA : GeoGuessr ne recharge pas la page à
+    // chaque clic, donc on intercepte pushState/replaceState/popstate (même
+    // principe que le hook fetch/XHR plus haut). replaceState est nécessaire
+    // en plus de pushState : certaines transitions (ex: lancer une partie
+    // depuis l'accueil) semblent l'utiliser plutôt que pushState.
+    const originalPushState = pageWindow.history.pushState;
+    pageWindow.history.pushState = function (...args) {
+      const result = originalPushState.apply(this, args);
+      setTimeout(checkHomepage, 300); // léger délai pour laisser la route se stabiliser
+      return result;
+    };
+
+    const originalReplaceState = pageWindow.history.replaceState;
+    pageWindow.history.replaceState = function (...args) {
+      const result = originalReplaceState.apply(this, args);
+      setTimeout(checkHomepage, 300);
+      return result;
+    };
+
+    pageWindow.addEventListener('popstate', () => setTimeout(checkHomepage, 300));
+
+    // Vérification initiale (script chargé directement sur l'accueil, ou en
+    // cours de partie après un refresh).
+    checkHomepage();
   })();
 
   console.log('[GeoCompanion] Script chargé, en attente d\'events GeoGuessr...');

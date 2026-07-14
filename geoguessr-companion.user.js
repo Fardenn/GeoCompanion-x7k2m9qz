@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      4.6
+// @version      5.2
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -409,6 +409,31 @@
         return false;
       }
     },
+
+    // appel d'une fonction Postgres (RPC) — utilisé pour les agrégats
+    // calculés côté base plutôt que côté client (voir supabase-stats-functions.sql)
+    async rpc(fnName, params = {}) {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fnName}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify(params),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          console.error(`[GeoCompanion] Erreur RPC Supabase (${fnName}) :`, res.status, text);
+          return null;
+        }
+        return await res.json();
+      } catch (e) {
+        console.error(`[GeoCompanion] Exception RPC Supabase (${fnName}) :`, e);
+        return null;
+      }
+    },
   };
 
   GeoCompanion.supabase = supabaseClient;
@@ -643,99 +668,82 @@
   // ============================================================
   // MODULE: stats
   // ------------------------------------------------------------
-  // Agrégation des stats par pays, avec filtres temporels
-  // (24h / 7j / 30j / total). Les agrégats sont calculés côté
-  // client à partir des lignes brutes — largement suffisant pour
-  // le volume attendu (2-3 utilisateurs).
+  // Agrégation des stats par pays/continent/carte, avec filtres
+  // temporels (24h / 7j / 30j / total). Les agrégats sont calculés
+  // côté base (fonctions Postgres, voir supabase-stats-functions.sql)
+  // plutôt que côté client — le volume de données transféré reste
+  // constant dans le temps, quelle que soit la taille de l'historique.
   //
   // Expose GeoCompanion.stats.getCountryStats(countryCode, filterKey)
   // ============================================================
   (function statsModule() {
-    function sinceClauseFor(filterKey) {
-      if (filterKey === 'all') return '';
-      const now = new Date();
+    // Convertit un filterKey ('24h'|'7d'|'30d'|'all') en timestamp ISO,
+    // ou null pour 'all' (pas de filtre de date côté RPC).
+    function sinceTimestamp(filterKey) {
+      if (filterKey === 'all') return null;
       const hoursByFilter = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
       const hours = hoursByFilter[filterKey];
-      if (!hours) return '';
-      const since = new Date(now.getTime() - hours * 3600 * 1000);
-      return `&played_at=gte.${since.toISOString()}`;
+      if (!hours) return null;
+      return new Date(Date.now() - hours * 3600 * 1000).toISOString();
     }
 
-    // Calcule les agrégats communs (nb rounds, score moyen, meilleur/pire, taux
-    // de réussite) à partir d'un tableau de lignes brutes — réutilisé par
-    // getCountryStats, getContinentStats et getMapStats pour éviter la
-    // duplication.
-    function computeAggregateStats(rows) {
-      if (!rows || rows.length === 0) {
-        return { count: 0, avgScore: null, bestScore: null, worstScore: null, successRate: null };
-      }
+    // Convertit une ligne renvoyée par une RPC d'agrégat (snake_case,
+    // colonnes possiblement absentes) vers le format utilisé par l'UI.
+    function toAggregateStats(row) {
+      if (!row) return { count: 0, avgScore: null, bestScore: null, worstScore: null, successRate: null };
+      return {
+        count: row.count ?? 0,
+        avgScore: row.avg_score != null ? Math.round(row.avg_score) : null,
+        bestScore: row.best_score ?? null,
+        worstScore: row.worst_score ?? null,
+        successRate: row.success_rate != null ? Math.round(row.success_rate) : null,
+      };
+    }
 
-      const scores = rows.map((r) => r.score).filter((s) => s != null);
-      const avgScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
-      const bestScore = scores.length ? Math.max(...scores) : null;
-      const worstScore = scores.length ? Math.min(...scores) : null;
-
-      const evaluatedRows = rows.filter((r) => r.country_correct != null);
-      const successRate = evaluatedRows.length
-        ? Math.round((evaluatedRows.filter((r) => r.country_correct).length / evaluatedRows.length) * 100)
-        : null;
-
-      return { count: rows.length, avgScore, bestScore, worstScore, successRate };
+    function toComparisonRows(rows) {
+      if (!rows) return [];
+      return rows
+        .map((r) => ({
+          player: r.player_name,
+          count: r.count,
+          avgScore: r.avg_score != null ? Math.round(r.avg_score) : null,
+          successRate: r.success_rate != null ? Math.round(r.success_rate) : null,
+        }))
+        .sort((a, b) => (b.avgScore ?? -1) - (a.avgScore ?? -1));
     }
 
     async function getCountryStats(countryCode, filterKey = 'all') {
-      const query = `select=score,distance_km,country_correct&country_code=eq.${countryCode}${sinceClauseFor(
-        filterKey
-      )}`;
-      const rows = await supabaseClient.select('rounds', query);
-      return computeAggregateStats(rows);
+      const rows = await supabaseClient.rpc('get_country_stats', {
+        p_country_code: countryCode,
+        p_since: sinceTimestamp(filterKey),
+      });
+      return toAggregateStats(rows && rows[0]);
     }
 
     async function getContinentStats(continent, filterKey = 'all') {
-      const query = `select=score,distance_km,country_correct&continent=eq.${continent}${sinceClauseFor(
-        filterKey
-      )}`;
-      const rows = await supabaseClient.select('rounds', query);
-      return computeAggregateStats(rows);
+      const rows = await supabaseClient.rpc('get_continent_stats', {
+        p_continent: continent,
+        p_since: sinceTimestamp(filterKey),
+      });
+      return toAggregateStats(rows && rows[0]);
     }
 
     async function getMapStats(mapId, filterKey = 'all') {
-      const query = `select=score,distance_km,country_correct&map_id=eq.${encodeURIComponent(
-        mapId
-      )}${sinceClauseFor(filterKey)}`;
-      const rows = await supabaseClient.select('rounds', query);
-      return computeAggregateStats(rows);
+      const rows = await supabaseClient.rpc('get_map_stats', {
+        p_map_id: mapId,
+        p_since: sinceTimestamp(filterKey),
+      });
+      return toAggregateStats(rows && rows[0]);
     }
 
     // Comparaison entre joueurs pour un pays donné : moyenne/taux de réussite
     // par joueur, triés du meilleur au moins bon score moyen.
     async function getPlayerComparison(countryCode, filterKey = 'all') {
-      const query = `select=player_name,score,country_correct&country_code=eq.${countryCode}${sinceClauseFor(
-        filterKey
-      )}`;
-      const rows = await supabaseClient.select('rounds', query);
-      if (!rows || rows.length === 0) return [];
-
-      const byPlayer = {};
-      for (const r of rows) {
-        if (!r.player_name) continue;
-        if (!byPlayer[r.player_name]) byPlayer[r.player_name] = { scores: [], corrects: [] };
-        if (r.score != null) byPlayer[r.player_name].scores.push(r.score);
-        if (r.country_correct != null) byPlayer[r.player_name].corrects.push(r.country_correct);
-      }
-
-      return Object.entries(byPlayer)
-        .map(([player, data]) => ({
-          player,
-          count: data.scores.length,
-          avgScore: data.scores.length
-            ? Math.round(data.scores.reduce((a, b) => a + b, 0) / data.scores.length)
-            : null,
-          successRate: data.corrects.length
-            ? Math.round((data.corrects.filter(Boolean).length / data.corrects.length) * 100)
-            : null,
-        }))
-        .sort((a, b) => (b.avgScore ?? -1) - (a.avgScore ?? -1));
+      const rows = await supabaseClient.rpc('get_player_comparison', {
+        p_country_code: countryCode,
+        p_since: sinceTimestamp(filterKey),
+      });
+      return toComparisonRows(rows);
     }
 
     // Stats groupées par pays (avec leur continent) pour un joueur donné —
@@ -743,48 +751,52 @@
     // c'est un outil de progression personnelle (voir tes propres points
     // faibles), la comparaison entre joueurs existe déjà par ailleurs.
     async function getAllCountryStats(playerName, filterKey = 'all') {
-      const query = `select=country_code,continent,score,country_correct&player_name=eq.${encodeURIComponent(
-        playerName
-      )}${sinceClauseFor(filterKey)}`;
-      const rows = await supabaseClient.select('rounds', query);
+      const rows = await supabaseClient.rpc('get_all_country_stats', {
+        p_player_name: playerName,
+        p_since: sinceTimestamp(filterKey),
+      });
       if (!rows) return {};
 
-      const byCountry = {};
+      const result = {};
       for (const r of rows) {
         if (!r.country_code) continue;
-        const code = r.country_code.toUpperCase(); // normalisation pour matcher COUNTRIES_BY_CONTINENT
-        if (!byCountry[code]) {
+        result[r.country_code] = {
           // Fallback : les rounds enregistrés avant l'ajout de la colonne
-          // "continent" l'ont à null en base — on le recalcule à la volée
-          // dans ce cas plutôt que de les perdre.
-          const continent = r.continent || continentFromCountryCode(code);
-          byCountry[code] = { continent, scores: [], corrects: [] };
-        }
-        if (r.score != null) byCountry[code].scores.push(r.score);
-        if (r.country_correct != null) byCountry[code].corrects.push(r.country_correct);
-      }
-
-      const result = {};
-      for (const [code, data] of Object.entries(byCountry)) {
-        result[code] = {
-          continent: data.continent,
-          count: data.scores.length,
-          avgScore: data.scores.length
-            ? Math.round(data.scores.reduce((a, b) => a + b, 0) / data.scores.length)
-            : null,
-          successRate: data.corrects.length
-            ? Math.round((data.corrects.filter(Boolean).length / data.corrects.length) * 100)
-            : null,
+          // "continent" l'ont à null en base — recalculé à la volée dans ce cas.
+          continent: r.continent || continentFromCountryCode(r.country_code),
+          count: r.count,
+          avgScore: r.avg_score != null ? Math.round(r.avg_score) : null,
+          successRate: r.success_rate != null ? Math.round(r.success_rate) : null,
         };
       }
       return result;
+    }
+
+    // Combo fin de round : pays + continent + carte + comparaison en un
+    // seul appel réseau (au lieu de 4 requêtes séparées).
+    async function getRoundEndStats(countryCode, continent, mapId, filterKey = 'all') {
+      const data = await supabaseClient.rpc('get_round_end_stats', {
+        p_country_code: countryCode,
+        p_continent: continent || null,
+        p_map_id: mapId || null,
+        p_since: sinceTimestamp(filterKey),
+      });
+      const safe = data || {};
+      return {
+        country: toAggregateStats(safe.country),
+        continent: safe.continent ? toAggregateStats(safe.continent) : null,
+        map: safe.map ? toAggregateStats(safe.map) : null,
+        comparison: toComparisonRows(safe.comparison),
+      };
     }
 
     // Supprime les rounds d'un joueur correspondant au filtre temporel donné
     // (même logique de date que les stats — filterKey 'all' supprime tout
     // l'historique du joueur, sans restriction de date).
     async function deleteRoundsForPlayer(playerName, filterKey = 'all') {
-      const query = `player_name=eq.${encodeURIComponent(playerName)}${sinceClauseFor(filterKey)}`;
+      const since = sinceTimestamp(filterKey);
+      const query =
+        `player_name=eq.${encodeURIComponent(playerName)}` + (since ? `&played_at=gte.${since}` : '');
       return supabaseClient.removeWhere('rounds', query);
     }
 
@@ -794,6 +806,7 @@
       getMapStats,
       getPlayerComparison,
       getAllCountryStats,
+      getRoundEndStats,
       deleteRoundsForPlayer,
     };
   })();
@@ -868,7 +881,7 @@
       const upper = countryCode.toUpperCase();
       const rows = await supabaseClient.select(
         'country_info',
-        `select=driving_side,plaque_image_url,bollard_image_url,poteau_image_url,voiture_text,voiture_image_url,voiture_exclusive,langue_text&country_code=eq.${upper}`
+        `select=driving_side,plaque_image_url,bollard_image_url,poteau_image_url,voiture_text,voiture_image_url,voiture_exclusive,route_text,route_image_url,langue_text&country_code=eq.${upper}`
       );
       return (rows && rows[0]) || {};
     }
@@ -1015,7 +1028,7 @@
           right: 20px;
           width: 33vw;
           max-width: 480px;
-          height: 80vh;
+          max-height: 80vh;
           overflow-y: auto;
           background: #1e1e2e;
           color: #f0f0f0;
@@ -1043,7 +1056,8 @@
           left: 20px;
           width: 480px;
           max-width: 38vw;
-          height: 85vh;
+          height: auto;
+          max-height: 85vh;
           display: flex;
           flex-direction: column;
           background: #1e1e2e;
@@ -1078,6 +1092,11 @@
           <div style="flex:1; min-width:0;">
             <div style="font-weight:bold; font-size:22px; margin-bottom:8px;">
               ${row.country_code ? countryNameFromCode(row.country_code) : 'Pays inconnu'}
+              ${
+                row.country_code && tldFromCode(row.country_code)
+                  ? `<span style="opacity:0.55; font-size:16px; font-weight:400;">(${tldFromCode(row.country_code)})</span>`
+                  : ''
+              }
             </div>
             <div>Score : ${row.score ?? '-'} pts</div>
             <div>Distance : ${row.distance_km != null ? row.distance_km.toFixed(1) + ' km' : '-'}</div>
@@ -1087,13 +1106,19 @@
           </div>
         </div>
         <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
-        <div id="geo-companion-stats">Chargement des statistiques…</div>
-        <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
-        <div id="geo-companion-continent-stats"></div>
-        <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
-        <div id="geo-companion-map-stats"></div>
-        <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
-        <div id="geo-companion-comparison"></div>
+        <button id="geo-companion-toggle-stats-btn" style="
+          padding:8px; border-radius:8px; border:none; cursor:pointer;
+          background:#33334a; color:white; font-size:14px; width:100%;
+        ">📊 Voir les stats</button>
+        <div id="geo-companion-stats-section" style="display:none; margin-top:10px;">
+          <div id="geo-companion-stats">Chargement des statistiques…</div>
+          <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
+          <div id="geo-companion-continent-stats"></div>
+          <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
+          <div id="geo-companion-map-stats"></div>
+          <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
+          <div id="geo-companion-comparison"></div>
+        </div>
       `;
     }
 
@@ -1110,7 +1135,7 @@
       `;
     }
 
-    async function renderStats(row, activeFilter) {
+    async function renderStats(row, activeFilter, cache) {
       const container = document.getElementById('geo-companion-stats');
       if (!container) return;
 
@@ -1130,74 +1155,65 @@
       `;
 
       container.querySelectorAll('button[data-filter]').forEach((btn) => {
-        btn.addEventListener('click', () => renderStats(row, btn.dataset.filter));
+        btn.addEventListener('click', () => renderStats(row, btn.dataset.filter, cache));
       });
 
-      const stats = await GeoCompanion.stats.getCountryStats(row.country_code, activeFilter);
+      // Cache par filtre temporel : changer de filtre puis revenir dessus ne
+      // refait pas d'appel réseau. Le cache est propre à ce round affiché
+      // (créé à chaque nouvel affichage), donc toujours à jour.
+      let stats;
+      if (cache.has(activeFilter)) {
+        stats = cache.get(activeFilter);
+      } else {
+        // Un seul appel réseau pour pays + continent + carte + comparaison,
+        // au lieu de 4 requêtes séparées (économise de la bande passante).
+        stats = await GeoCompanion.stats.getRoundEndStats(row.country_code, row.continent, row.map_id, activeFilter);
+        cache.set(activeFilter, stats);
+      }
       const body = document.getElementById('geo-companion-stats-body');
-      if (body) body.innerHTML = aggregateStatsHtml(stats);
+      if (body) body.innerHTML = aggregateStatsHtml(stats.country);
 
-      await renderContinentStats(row, activeFilter);
-      await renderMapStats(row, activeFilter);
-      await renderComparison(row, activeFilter);
+      renderContinentStats(row, stats.continent);
+      renderMapStats(row, stats.map);
+      renderComparison(row, stats.comparison);
     }
 
-    async function renderContinentStats(row, activeFilter) {
+    function renderContinentStats(row, continentStats) {
       const container = document.getElementById('geo-companion-continent-stats');
       if (!container) return;
-      if (!row.continent) {
+      if (!row.continent || !continentStats) {
         container.innerHTML = '';
         return;
       }
 
       const label = CONTINENT_LABELS[row.continent] || row.continent;
-      container.innerHTML = `<div style="font-weight:bold; font-size:17px; margin-bottom:8px;">🌍 ${label}</div><div style="opacity:0.6;">Chargement…</div>`;
-
-      const stats = await GeoCompanion.stats.getContinentStats(row.continent, activeFilter);
-      const currentContainer = document.getElementById('geo-companion-continent-stats');
-      if (!currentContainer) return; // panneau remplacé entre-temps
-
-      currentContainer.innerHTML = `
+      container.innerHTML = `
         <div style="font-weight:bold; font-size:17px; margin-bottom:8px;">🌍 ${label}</div>
-        <div style="opacity:0.85;">${aggregateStatsHtml(stats)}</div>
+        <div style="opacity:0.85;">${aggregateStatsHtml(continentStats)}</div>
       `;
     }
 
-    async function renderMapStats(row, activeFilter) {
+    function renderMapStats(row, mapStats) {
       const container = document.getElementById('geo-companion-map-stats');
       if (!container) return;
-      if (!row.map_id) {
+      if (!row.map_id || !mapStats) {
         container.innerHTML = '';
         return;
       }
 
       const label = row.map_name || row.map_id;
-      container.innerHTML = `<div style="font-weight:bold; font-size:17px; margin-bottom:8px;">🗺️ ${escapeHtml(
-        label
-      )}</div><div style="opacity:0.6;">Chargement…</div>`;
-
-      const stats = await GeoCompanion.stats.getMapStats(row.map_id, activeFilter);
-      const currentContainer = document.getElementById('geo-companion-map-stats');
-      if (!currentContainer) return; // panneau remplacé entre-temps
-
-      currentContainer.innerHTML = `
+      container.innerHTML = `
         <div style="font-weight:bold; font-size:17px; margin-bottom:8px;">🗺️ ${escapeHtml(label)}</div>
-        <div style="opacity:0.85;">${aggregateStatsHtml(stats)}</div>
+        <div style="opacity:0.85;">${aggregateStatsHtml(mapStats)}</div>
       `;
     }
 
-    async function renderComparison(row, activeFilter) {
+    function renderComparison(row, comparison) {
       const container = document.getElementById('geo-companion-comparison');
       if (!container) return;
 
-      container.innerHTML = `<div style="font-weight:bold; font-size:17px; margin-bottom:8px;">👥 Comparaison</div><div style="opacity:0.6;">Chargement…</div>`;
-
-      const comparison = await GeoCompanion.stats.getPlayerComparison(row.country_code, activeFilter);
-      const currentContainer = document.getElementById('geo-companion-comparison');
-      if (!currentContainer) return; // panneau remplacé entre-temps
-
-      if (comparison.length === 0) {
-        currentContainer.innerHTML = `
+      if (!comparison || comparison.length === 0) {
+        container.innerHTML = `
           <div style="font-weight:bold; font-size:17px; margin-bottom:8px;">👥 Comparaison</div>
           <div style="opacity:0.6; font-size:14px;">Aucune donnée pour cette période.</div>
         `;
@@ -1219,7 +1235,7 @@
         )
         .join('');
 
-      currentContainer.innerHTML = `
+      container.innerHTML = `
         <div style="font-weight:bold; font-size:17px; margin-bottom:8px;">👥 Comparaison</div>
         ${rowsHtml}
       `;
@@ -1320,40 +1336,53 @@
       const tipsPanel = ensureTipsPanel();
 
       const plonkitUrl = plonkitUrlFromCode(row.country_code);
-      const tld = tldFromCode(row.country_code);
       const info = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
 
       tipsPanel.innerHTML = `
-        <div style="font-weight:bold; font-size:22px; margin-bottom:6px; flex-shrink:0;">
-          💡 Tips ${
-            plonkitUrl
-              ? `<a href="${plonkitUrl}" target="_blank" rel="noopener noreferrer" style="color:#4a9eff; text-decoration:underline; font-size:17px;">🔗 Plonkit</a>`
-              : ''
-          }
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-shrink:0;">
+          <div style="font-weight:bold; font-size:22px;">
+            💡 Tips ${
+              plonkitUrl
+                ? `<a href="${plonkitUrl}" target="_blank" rel="noopener noreferrer" style="color:#4a9eff; text-decoration:underline; font-size:17px;">🔗 Plonkit</a>`
+                : ''
+            }
+          </div>
+          <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" style="
+            background:none; border:none; color:#4a9eff; cursor:pointer; font-size:18px;
+          ">▼</button>
         </div>
-        <div style="display:flex; justify-content:space-between; align-items:center; font-size:16px; font-weight:700; opacity:0.9; margin-bottom:8px; flex-shrink:0;">
-          <span>🌐 ${tld || '-'}</span>
-          <span id="geo-companion-driving-side"></span>
+        <div id="geo-companion-tips-body" style="display:flex; flex-direction:column; min-height:0; flex:1;">
+          <div id="geo-companion-country-fields" style="margin-bottom:6px; flex-shrink:0;"></div>
+          <div id="geo-companion-voiture-route-fields" style="margin-bottom:10px; flex-shrink:0; display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+            <div id="geo-companion-voiture-field"></div>
+            <div id="geo-companion-route-field"></div>
+          </div>
+          <div id="geo-companion-tips-list" style="flex:1; overflow-y:auto; min-height:0;">
+            ${
+              tips.length === 0
+                ? `<div style="opacity:0.6; font-size:16px;">Aucun tip pour ce pays pour l'instant.</div>`
+                : `<div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">${tips.map(tipHtml).join('')}</div>`
+            }
+          </div>
+          <button id="geo-companion-add-tip-btn" style="
+            margin-top:6px; padding:7px; border-radius:8px; border:none; cursor:pointer;
+            background:#33334a; color:white; font-size:16px; width:100%; flex-shrink:0;
+          ">+ Ajouter un tip</button>
+          <div id="geo-companion-tip-form" style="flex-shrink:0;"></div>
         </div>
-        <div id="geo-companion-country-fields" style="margin-bottom:6px; flex-shrink:0;"></div>
-        <div id="geo-companion-voiture-field" style="margin-bottom:10px; flex-shrink:0;"></div>
-        <div id="geo-companion-tips-list" style="flex:1; overflow-y:auto; min-height:0;">
-          ${
-            tips.length === 0
-              ? `<div style="opacity:0.6; font-size:16px;">Aucun tip pour ce pays pour l'instant.</div>`
-              : `<div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">${tips.map(tipHtml).join('')}</div>`
-          }
-        </div>
-        <button id="geo-companion-add-tip-btn" style="
-          margin-top:6px; padding:7px; border-radius:8px; border:none; cursor:pointer;
-          background:#33334a; color:white; font-size:16px; width:100%; flex-shrink:0;
-        ">+ Ajouter un tip</button>
-        <div id="geo-companion-tip-form" style="flex-shrink:0;"></div>
       `;
 
-      renderDrivingSide(tipsPanel, row, info.driving_side);
       renderCountryInfoFields(tipsPanel, row, info);
       renderVoitureField(tipsPanel, row, info);
+      renderRouteField(tipsPanel, row, info);
+
+      const collapseBtn = tipsPanel.querySelector('#geo-companion-tips-collapse-btn');
+      const tipsBody = tipsPanel.querySelector('#geo-companion-tips-body');
+      collapseBtn.addEventListener('click', () => {
+        const isHidden = tipsBody.style.display === 'none';
+        tipsBody.style.display = isHidden ? 'flex' : 'none';
+        collapseBtn.textContent = isHidden ? '▼' : '▶';
+      });
 
       tipsPanel.querySelectorAll('[data-edit-tip]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -1380,31 +1409,94 @@
       return 'Inconnu';
     }
 
-    function renderDrivingSide(tipsPanel, row, side) {
-      const container = tipsPanel.querySelector('#geo-companion-driving-side');
+    // Champ "Route" composite : texte + image + sens de circulation,
+    // affiché à côté du champ Voiture.
+    function renderRouteField(tipsPanel, row, info) {
+      const container = tipsPanel.querySelector('#geo-companion-route-field');
       if (!container) return;
 
+      const hasContent = info.route_text || info.route_image_url;
+
       container.innerHTML = `
-        <span>🚗 ${drivingSideLabel(side)}</span>
-        <button data-edit-driving style="background:none; border:none; color:#4a9eff; cursor:pointer; font-size:15px;" title="Corriger">✏️</button>
+        <div style="background:#2a2a3d; border-radius:6px; padding:7px 9px; font-size:15px; height:100%; box-sizing:border-box;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span style="opacity:0.75; font-weight:700; font-size:15px;">Route 🚗 ${drivingSideLabel(info.driving_side)}</span>
+            <button data-edit-route style="background:none; border:none; color:#4a9eff; cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
+          </div>
+          <div data-route-display style="margin-top:2px;">
+            ${
+              hasContent
+                ? `
+              ${info.route_text ? `<div>${escapeHtml(info.route_text)}</div>` : ''}
+              ${
+                info.route_image_url
+                  ? `<img data-lightbox="true" src="${info.route_image_url}" style="max-height:98px; max-width:100%; border-radius:4px; display:block; margin-top:4px; background:#111; cursor:zoom-in;">`
+                  : ''
+              }
+            `
+                : '<span style="opacity:0.45;">Non renseigné</span>'
+            }
+          </div>
+          <div data-route-form></div>
+        </div>
       `;
 
-      container.querySelector('[data-edit-driving]').addEventListener('click', () => {
-        container.innerHTML = `
-          <button data-side="left" style="padding:3px 6px; border-radius:5px; border:none; cursor:pointer; background:${
-            side === 'left' ? '#4a9eff' : '#33334a'
-          }; color:white; font-size:11px;">⬅️ Gauche</button>
-          <button data-side="right" style="padding:3px 6px; border-radius:5px; border:none; cursor:pointer; background:${
-            side === 'right' ? '#4a9eff' : '#33334a'
-          }; color:white; font-size:11px;">➡️ Droite</button>
+      container.querySelector('[data-edit-route]').addEventListener('click', () => {
+        const formEl = container.querySelector('[data-route-form]');
+        formEl.innerHTML = `
+          <input type="text" data-route-text value="${escapeHtml(
+            info.route_text || ''
+          )}" placeholder="Texte (marquage, bornes...)" style="
+            width:100%; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
+            background:#1a1a28; color:white; font-size:15px;
+          ">
+          <input type="text" data-route-image value="${escapeHtml(
+            info.route_image_url || ''
+          )}" placeholder="URL de l'image (optionnel)" style="
+            width:100%; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
+            background:#1a1a28; color:white; font-size:15px;
+          ">
+          <div style="display:flex; gap:4px; margin-top:6px;">
+            <button data-route-side="left" style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:${
+              info.driving_side === 'left' ? '#4a9eff' : '#33334a'
+            }; color:white; font-size:11px;">⬅️ Gauche</button>
+            <button data-route-side="right" style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:${
+              info.driving_side === 'right' ? '#4a9eff' : '#33334a'
+            }; color:white; font-size:11px;">➡️ Droite</button>
+          </div>
+          <div style="display:flex; gap:4px; margin-top:6px;">
+            <button data-save-route style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#4a9eff; color:white; font-size:13px;">OK</button>
+            <button data-cancel-route style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:#33334a; color:white; font-size:13px;">Annuler</button>
+          </div>
         `;
 
-        container.querySelectorAll('[data-side]').forEach((btn) => {
-          btn.addEventListener('click', async () => {
-            await GeoCompanion.countryInfo.setCountryInfoField(row.country_code, 'driving_side', btn.dataset.side);
-            const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
-            renderDrivingSide(tipsPanel, row, updated.driving_side);
+        let selectedSide = info.driving_side || null;
+        const textEl = formEl.querySelector('[data-route-text]');
+        const imageEl = formEl.querySelector('[data-route-image]');
+        stopKeyPropagation(textEl);
+        stopKeyPropagation(imageEl);
+
+        formEl.querySelectorAll('[data-route-side]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            selectedSide = btn.dataset.routeSide;
+            formEl.querySelectorAll('[data-route-side]').forEach((b) => {
+              b.style.background = b.dataset.routeSide === selectedSide ? '#4a9eff' : '#33334a';
+            });
           });
+        });
+
+        formEl.querySelector('[data-cancel-route]').addEventListener('click', () => {
+          formEl.innerHTML = '';
+        });
+
+        formEl.querySelector('[data-save-route]').addEventListener('click', async () => {
+          await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, {
+            route_text: textEl.value.trim() || null,
+            route_image_url: imageEl.value.trim() || null,
+            driving_side: selectedSide,
+          });
+          const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
+          renderRouteField(tipsPanel, row, updated);
         });
       });
     }
@@ -1617,8 +1709,31 @@
       if (!row.country_code) return; // pas de pays détecté, rien d'exploitable à afficher
       const panel = ensurePanel();
       renderRoundResult(panel, row);
-      await renderStats(row, 'all');
       await renderTips(row);
+
+      // Les stats ne sont chargées (et donc aucune requête Supabase envoyée)
+      // que si l'utilisateur clique explicitement sur le bouton — évite une
+      // requête systématique à chaque round si on ne regarde pas les stats.
+      const statsCache = new Map(); // propre à cet affichage de round
+      const toggleBtn = document.getElementById('geo-companion-toggle-stats-btn');
+      const statsSection = document.getElementById('geo-companion-stats-section');
+      if (toggleBtn && statsSection) {
+        let loaded = false;
+        toggleBtn.addEventListener('click', async () => {
+          const isHidden = statsSection.style.display === 'none';
+          if (isHidden) {
+            statsSection.style.display = 'block';
+            toggleBtn.textContent = '📊 Masquer les stats';
+            if (!loaded) {
+              loaded = true;
+              await renderStats(row, 'all', statsCache);
+            }
+          } else {
+            statsSection.style.display = 'none';
+            toggleBtn.textContent = '📊 Voir les stats';
+          }
+        });
+      }
     });
 
     // Les panneaux résultat/tips n'ont d'intérêt qu'une fois le round terminé
@@ -1643,6 +1758,12 @@
     const CONTINENT_ORDER = ['europe', 'asia', 'africa', 'north_america', 'south_america', 'oceania'];
     let dashboardActiveContinent = CONTINENT_ORDER[0];
     let dashboardActiveFilter = 'all';
+
+    // Cache en mémoire des stats par filtre temporel : changer d'onglet
+    // continent ne change pas la requête sous-jacente (déjà tout récupéré
+    // pour ce filtre), donc pas besoin de retaper le réseau à chaque clic.
+    // Invalidé dès qu'un round est enregistré ou supprimé.
+    const dashboardStatsCache = new Map();
 
     function isHomepage() {
       // Accueil GeoGuessr : "/" ou "/xx" (préfixe de langue), rien après.
@@ -1693,12 +1814,20 @@
 
     async function renderDashboard() {
       const panel = ensureDashboard();
-      panel.innerHTML = `<div style="font-weight:bold; font-size:16px; margin-bottom:8px; flex-shrink:0;">📊 Mes stats</div><div style="opacity:0.6;">Chargement…</div>`;
 
       const playerName = GeoCompanion.getPlayerName();
-      const allStats = playerName
-        ? await GeoCompanion.stats.getAllCountryStats(playerName, dashboardActiveFilter)
-        : {};
+      let allStats;
+
+      if (!playerName) {
+        allStats = {};
+      } else if (dashboardStatsCache.has(dashboardActiveFilter)) {
+        // déjà en cache pour ce filtre (ex: on ne fait que changer de continent) — pas de requête réseau
+        allStats = dashboardStatsCache.get(dashboardActiveFilter);
+      } else {
+        panel.innerHTML = `<div style="font-weight:bold; font-size:16px; margin-bottom:8px; flex-shrink:0;">📊 Mes stats</div><div style="opacity:0.6;">Chargement…</div>`;
+        allStats = await GeoCompanion.stats.getAllCountryStats(playerName, dashboardActiveFilter);
+        dashboardStatsCache.set(dashboardActiveFilter, allStats);
+      }
 
       const currentPanel = document.getElementById(DASHBOARD_ID);
       if (!currentPanel) return; // page quittée entre-temps
@@ -1753,6 +1882,7 @@
         const ok = await GeoCompanion.stats.deleteRoundsForPlayer(playerName, dashboardActiveFilter);
         if (ok) {
           console.log('[GeoCompanion] 🗑️ Rounds supprimés pour la période :', dashboardActiveFilter);
+          dashboardStatsCache.clear();
           await renderDashboard();
         } else {
           alert('Erreur lors de la suppression — vérifie la console pour le détail.');
@@ -1840,6 +1970,11 @@
     // (détecté de façon fiable via l'interception réseau, pas via l'URL),
     // on masque le dashboard directement.
     GeoCompanion.on('gameStart', removeDashboard);
+
+    // Un nouveau round enregistré rend les stats du dashboard obsolètes.
+    GeoCompanion.on('roundRecorded', () => {
+      dashboardStatsCache.clear();
+    });
 
     // Détection de navigation SPA : GeoGuessr ne recharge pas la page à
     // chaque clic, donc on intercepte pushState/replaceState/popstate (même

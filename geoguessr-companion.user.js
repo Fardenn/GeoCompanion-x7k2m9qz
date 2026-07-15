@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.00
+// @version      1.20
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -435,6 +435,57 @@
       });
       return originalSend.apply(this, args);
     };
+
+    // --- Hook WebSocket (live challenge uniquement) ---
+    // En live challenge, GeoGuessr pousse les vrais events de fin de round/
+    // partie via WebSocket ("LiveChallengeRoundEnded", "LiveChallengeFinished"),
+    // pas seulement via des réponses HTTP. Un joueur qui a déjà guessé et ne
+    // fait plus aucune requête HTTP ensuite ne verrait jamais la transition
+    // "Ended" avec le seul hook fetch/XHR — d'où ce hook supplémentaire,
+    // confirmé nécessaire par capture réseau (le round-end HTTP ne se
+    // déclenchait pas de façon fiable à plusieurs joueurs).
+    // Ces messages WS ne contiennent pas les données du round (juste un code
+    // + gameId), donc on les utilise comme simple déclencheur fiable, et on
+    // reconstruit l'event à partir du dernier snapshot HTTP connu (déjà
+    // utilisé comme filet de sécurité pour le cas classique aussi).
+    const OriginalWebSocket = pageWindow.WebSocket;
+    if (typeof OriginalWebSocket === 'function') {
+      pageWindow.WebSocket = function (...args) {
+        const ws = new OriginalWebSocket(...args);
+        ws.addEventListener('message', (event) => {
+          let data;
+          try {
+            data = JSON.parse(event.data);
+          } catch (e) {
+            return; // message non-JSON, pas pour nous
+          }
+          if (!data || !data.code) return;
+
+          if (data.code === 'LiveChallengeRoundEnded') {
+            if (roundEndEmittedRound !== currentRound && lastGoodGameSnapshot) {
+              roundEndEmittedRound = currentRound;
+              persistState();
+              GeoCompanion.emit('roundEnd', lastGoodGameSnapshot);
+            }
+          } else if (data.code === 'LiveChallengeFinished') {
+            if (gameState !== 'finished' && lastGoodGameSnapshot) {
+              gameState = 'finished';
+              persistState();
+              GeoCompanion.emit('gameEnd', lastGoodGameSnapshot);
+            }
+          } else if (data.code === 'LiveChallengeRoundStarted') {
+            // Pas de données de round dans ce message — sert juste de
+            // déclencheur pour nettoyer les panneaux de l'ancien round.
+            GeoCompanion.emit('roundStart', lastGoodGameSnapshot || {});
+          }
+        });
+        return ws;
+      };
+      // Préserve le prototype et les constantes statiques (OPEN, CLOSED...)
+      // pour que le reste du site continue de fonctionner normalement.
+      pageWindow.WebSocket.prototype = OriginalWebSocket.prototype;
+      Object.setPrototypeOf(pageWindow.WebSocket, OriginalWebSocket);
+    }
   })();
 
   // ============================================================
@@ -1640,7 +1691,10 @@
                 : ''
             }
           </div>
-          <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--icon gc-btn--icon-accent" style="font-size:18px;">▼</button>
+          <div style="display:flex; gap:6px;">
+            <button id="geo-companion-tips-refresh-btn" title="Actualiser les tips" class="gc-btn gc-btn--icon gc-btn--icon-accent" style="font-size:16px;">🔄</button>
+            <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--icon gc-btn--icon-accent" style="font-size:18px;">▼</button>
+          </div>
         </div>
         <div id="geo-companion-tips-body" style="display:flex; flex-direction:column; min-height:0; flex:1;">
           <div id="geo-companion-country-fields" class="gc-mb-6 gc-shrink-0"></div>
@@ -1670,6 +1724,12 @@
         const isHidden = tipsBody.style.display === 'none';
         tipsBody.style.display = isHidden ? 'flex' : 'none';
         collapseBtn.textContent = isHidden ? '▼' : '▶';
+      });
+
+      const refreshBtn = tipsPanel.querySelector('#geo-companion-tips-refresh-btn');
+      refreshBtn.addEventListener('click', async () => {
+        refreshBtn.disabled = true;
+        await renderTips(row);
       });
 
       tipsPanel.querySelectorAll('[data-edit-tip]').forEach((btn) => {
@@ -1975,8 +2035,11 @@
       });
     }
 
-    GeoCompanion.on('roundRecorded', async (row) => {
-      if (!row.country_code) return; // pas de pays détecté, rien d'exploitable à afficher
+    // Affiche le résultat d'un round (panneau principal + tips + bouton
+    // stats) — factorisé pour être réutilisable à la fois depuis l'event
+    // roundRecorded normal ET depuis la restauration après un rechargement
+    // de page (voir plus bas).
+    async function displayRoundResult(row) {
       const panel = ensurePanel();
       renderRoundResult(panel, row);
       await renderTips(row);
@@ -2004,6 +2067,23 @@
           }
         });
       }
+    }
+
+    // Persiste quel round est actuellement affiché (ou "aucun"), pour
+    // pouvoir restaurer l'affichage si la page est rechargée entre la fin
+    // d'un round (pays révélé) et le début du suivant — sans avoir besoin
+    // d'attendre un nouvel event réseau, qui pourrait ne jamais arriver
+    // (ex: on ne fait plus aucune requête après avoir vu le résultat).
+    const LAST_DISPLAY_KEY = 'geoCompanion_lastRoundDisplay';
+
+    GeoCompanion.on('gameStart', () => {
+      GM_setValue(LAST_DISPLAY_KEY, { row: null, visible: false });
+    });
+
+    GeoCompanion.on('roundRecorded', async (row) => {
+      if (!row.country_code) return; // pas de pays détecté, rien d'exploitable à afficher
+      await displayRoundResult(row);
+      GM_setValue(LAST_DISPLAY_KEY, { row, visible: true });
     });
 
     // Les panneaux résultat/tips n'ont d'intérêt qu'une fois le round terminé
@@ -2014,7 +2094,16 @@
       if (panel) panel.remove();
       const tipsPanel = document.getElementById(TIPS_PANEL_ID);
       if (tipsPanel) tipsPanel.remove();
+      GM_setValue(LAST_DISPLAY_KEY, { row: null, visible: false });
     });
+
+    // Restauration au chargement du script : si la page est rechargée juste
+    // après la fin d'un round (avant le round suivant), on réaffiche
+    // immédiatement à partir des données déjà connues, sans attendre.
+    const lastDisplay = GM_getValue(LAST_DISPLAY_KEY, null);
+    if (lastDisplay?.visible && lastDisplay.row) {
+      displayRoundResult(lastDisplay.row);
+    }
 
     // ==========================================================
     // DASHBOARD (page d'accueil)
@@ -2028,6 +2117,7 @@
     const CONTINENT_ORDER = ['europe', 'asia', 'africa', 'north_america', 'south_america', 'oceania'];
     let dashboardActiveContinent = CONTINENT_ORDER[0];
     let dashboardActiveFilter = 'all';
+    let dashboardCollapsed = false; // conservé entre les re-rendus (changement de filtre/continent)
 
     // Cache en mémoire des stats par filtre temporel : changer d'onglet
     // continent ne change pas la requête sous-jacente (déjà tout récupéré
@@ -2193,29 +2283,46 @@
       panel.innerHTML = `
         <div class="gc-card-header gc-mb-6 gc-shrink-0">
           <div class="gc-title" style="font-size:16px;">Mes stats</div>
-          <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--danger gc-btn--pill" style="font-style:normal; padding:5px 10px;">🗑️</button>
+          <div style="display:flex; gap:6px;">
+            <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--danger gc-btn--pill" style="font-style:normal; padding:5px 10px;">🗑️</button>
+            <button id="geo-companion-dashboard-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--icon gc-btn--icon-accent" style="font-style:normal; font-size:18px;">${
+              dashboardCollapsed ? '▶' : '▼'
+            }</button>
+          </div>
         </div>
-        <hr class="gc-hr gc-hr--dashed" style="margin:0 0 10px;">
-        <div class="gc-btn-row gc-mb-8 gc-shrink-0">
-          ${FILTERS.map(
-            (f) => `
-            <button data-dash-filter="${f.key}" class="gc-btn gc-btn--flex gc-btn--pill gc-btn--xs ${
-              f.key === dashboardActiveFilter ? 'gc-btn--jouer' : 'gc-btn--secondary'
-            }">${f.label}</button>
-          `
-          ).join('')}
+        <div id="geo-companion-dashboard-body" style="display:${
+          dashboardCollapsed ? 'none' : 'flex'
+        }; flex-direction:column; min-height:0; flex:1;">
+          <hr class="gc-hr gc-hr--dashed" style="margin:0 0 10px;">
+          <div class="gc-btn-row gc-mb-8 gc-shrink-0">
+            ${FILTERS.map(
+              (f) => `
+              <button data-dash-filter="${f.key}" class="gc-btn gc-btn--flex gc-btn--pill gc-btn--xs ${
+                f.key === dashboardActiveFilter ? 'gc-btn--jouer' : 'gc-btn--secondary'
+              }">${f.label}</button>
+            `
+            ).join('')}
+          </div>
+          <div class="gc-btn-row gc-mb-10 gc-shrink-0">
+            ${CONTINENT_ORDER.map(
+              (c) => `
+              <button data-dash-continent="${c}" class="gc-btn gc-btn--flex-auto gc-btn--pill gc-btn--xs ${
+                c === dashboardActiveContinent ? 'gc-btn--jouer' : 'gc-btn--secondary'
+              }" style="padding-left:6px; padding-right:6px;">${CONTINENT_LABELS[c]}</button>
+            `
+            ).join('')}
+          </div>
+          <div id="geo-companion-dashboard-list" style="flex:1; overflow-y:auto; min-height:0;"></div>
         </div>
-        <div class="gc-btn-row gc-mb-10 gc-shrink-0">
-          ${CONTINENT_ORDER.map(
-            (c) => `
-            <button data-dash-continent="${c}" class="gc-btn gc-btn--flex-auto gc-btn--pill gc-btn--xs ${
-              c === dashboardActiveContinent ? 'gc-btn--jouer' : 'gc-btn--secondary'
-            }" style="padding-left:6px; padding-right:6px;">${CONTINENT_LABELS[c]}</button>
-          `
-          ).join('')}
-        </div>
-        <div id="geo-companion-dashboard-list" style="flex:1; overflow-y:auto; min-height:0;"></div>
       `;
+
+      const collapseBtn = panel.querySelector('#geo-companion-dashboard-collapse-btn');
+      const dashboardBody = panel.querySelector('#geo-companion-dashboard-body');
+      collapseBtn.addEventListener('click', () => {
+        dashboardCollapsed = !dashboardCollapsed;
+        dashboardBody.style.display = dashboardCollapsed ? 'none' : 'flex';
+        collapseBtn.textContent = dashboardCollapsed ? '▶' : '▼';
+      });
 
       const deleteBtn = panel.querySelector('#geo-companion-dashboard-delete-btn');
       deleteBtn.addEventListener('click', async () => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.30
+// @version      1.31
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -123,7 +123,7 @@
         border: var(--gc-border);
         padding: 16px;
         font-family: var(--gc-font);
-        z-index: 999999;
+        z-index: 1;
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
         line-height: 1.4;
         box-sizing: border-box;

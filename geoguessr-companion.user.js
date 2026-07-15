@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.21
+// @version      1.30
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -156,7 +156,15 @@
       .gc-btn--flex { flex: 1; }
       .gc-btn--flex-auto { flex: 1 1 auto; white-space: nowrap; }
       .gc-btn--lg { font-size: 16px; padding: 10px 0; border-radius: 8px; }
-      .gc-btn--xs { font-size: 11px; padding: 0 4px; height: 24px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; }
+      .gc-btn--xs {
+        font-size: clamp(9px, 0.85vw, 11px);
+        padding: 0 clamp(2px, 0.3vw, 4px);
+        height: clamp(19px, 1.7vw, 24px);
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
       .gc-btn--primary { background: var(--gc-accent-gradient); }
       .gc-btn--jouer {
         background: linear-gradient(var(--ds-color-brand-30, #a685ff), var(--ds-color-brand-70, #4a2399));
@@ -241,6 +249,14 @@
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
         max-width: 80vw;
       }
+
+      /* Voir foreignOverlayModule plus bas : dès qu'un élément de GeoGuessr
+         lui-même (menu profil, modale...) est ajouté par-dessus, on repasse
+         nos panneaux sous la interface du site le temps qu'il soit ouvert,
+         plutôt que de le recouvrir avec notre z-index habituellement énorme. */
+      body.gc-foreign-overlay-open .gc-panel {
+        z-index: 100 !important;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -269,6 +285,65 @@
   };
 
   // ============================================================
+  // CORE: foreignOverlay (menu profil GeoGuessr masqué par nos panneaux)
+  // ------------------------------------------------------------
+  // Nos panneaux (.gc-panel) utilisent un z-index volontairement énorme
+  // pour rester au-dessus du contenu du jeu. Problème : ça recouvre aussi
+  // les propres menus déroulants/modales de GeoGuessr (ex: le menu profil
+  // dans le header), qui apparaissent alors visuellement "en dessous".
+  // On ne connaît pas leurs sélecteurs exacts (et ils peuvent changer), donc
+  // on détecte génériquement : dès qu'un nouvel élément est ajouté comme
+  // enfant direct de <body> par le site (pas par nous), on suppose que
+  // c'est un overlay du site (menu, modale, tooltip portalé...) et on
+  // repasse temporairement nos panneaux sous lui via la classe CSS
+  // gc-foreign-overlay-open (voir injectThemeStyles). Restauré dès que cet
+  // élément étranger est retiré du DOM (menu refermé).
+  // ============================================================
+  (function foreignOverlayModule() {
+    function isOwnNode(node) {
+      return !!(node.id && node.id.startsWith('geo-companion'));
+    }
+
+    // Référence des enfants de <body> déjà présents une fois la page
+    // stabilisée (racine de l'app GeoGuessr, etc.) — sans ça, la racine
+    // de leur app compterait elle-même comme "étrangère" en permanence
+    // dès la première mutation, et la classe resterait activée pour de bon.
+    let baselineChildren = null;
+
+    function captureBaseline() {
+      baselineChildren = new Set(Array.from(document.body.children));
+    }
+
+    function refreshOverlayState() {
+      if (!baselineChildren) return; // référence pas encore figée, on ignore
+      const hasForeignOverlay = Array.from(document.body.children).some(
+        (child) => !isOwnNode(child) && !baselineChildren.has(child)
+      );
+      document.body.classList.toggle('gc-foreign-overlay-open', hasForeignOverlay);
+    }
+
+    // Le bootstrap tourne en document-start : document.body peut ne pas
+    // encore exister, on attend qu'il soit disponible avant d'observer.
+    function start() {
+      if (!document.body) {
+        setTimeout(start, 50);
+        return;
+      }
+      const observer = new MutationObserver(refreshOverlayState);
+      observer.observe(document.body, { childList: true });
+      // On fige la référence une fois la page chargée (pas avant : les
+      // éléments ajoutés par GeoGuessr à son propre démarrage ne doivent
+      // pas être pris pour un overlay).
+      if (document.readyState === 'complete') {
+        captureBaseline();
+      } else {
+        pageWindow.addEventListener('load', captureBaseline, { once: true });
+      }
+    }
+    start();
+  })();
+
+  // ============================================================
   // CORE: détection des events de partie (fetch/XHR + parsing)
   // ============================================================
   (function apiDetectionModule() {
@@ -292,15 +367,51 @@
     // réponse qui signale la vraie fin de round, ex. l'appel "end-round",
     // n'a pas les données du guess — on les récupère depuis ce snapshot).
     let lastGoodGameSnapshot = null;
+    // Live challenge uniquement : les events WebSocket de début/fin de round
+    // n'incluent pas le numéro de round (juste un code). Sans ce compteur
+    // dédié, on dépendait de "currentRound" — qui ne se met à jour que si
+    // une réponse HTTP avec un champ round exploitable arrive entre deux
+    // rounds. Un joueur qui ne fait plus aucune requête après avoir guessé
+    // (cas courant à plusieurs) ne déclenchait alors jamais la mise à jour,
+    // et le round-end suivant était silencieusement ignoré (comparaison à
+    // l'identique). Ce compteur avance uniquement via les events WS eux-mêmes,
+    // donc indépendamment de si HTTP a suivi ou non — best-effort, à confirmer
+    // sur le terrain.
+    let liveChallengeRound = savedState?.liveChallengeRound ?? null;
 
     function persistState() {
-      GM_setValue(STATE_KEY, { currentGameId, currentRound, guessesSeenTotal, gameState, roundEndEmittedRound });
+      GM_setValue(STATE_KEY, {
+        currentGameId,
+        currentRound,
+        guessesSeenTotal,
+        gameState,
+        roundEndEmittedRound,
+        liveChallengeRound,
+      });
     }
 
     // Récupère un identifiant de partie quel que soit le nom du champ utilisé
     // selon le mode (classic, challenge, live challenge, battle royale, duels...)
     function getGameToken(game) {
       return game.token || game.gameId || game.id || null;
+    }
+
+    // Certaines réponses live challenge n'ont aucun champ round exploitable
+    // au niveau racine (contrairement au mode classique) — on retombe alors
+    // sur game.rounds[] : le premier round dont l'état n'est pas "Ended"
+    // (donc celui en cours), sinon le dernier de la liste si tous sont
+    // terminés. Rend la détection de round moins dépendante d'un champ qui
+    // peut être absent selon le mode — best-effort, à confirmer sur le terrain.
+    function deriveRoundNumber(game) {
+      const topLevel = game.round ?? game.roundNumber ?? game.currentRoundNumber;
+      if (typeof topLevel === 'number') return topLevel;
+      const roundsInfo = game.rounds;
+      if (Array.isArray(roundsInfo) && roundsInfo.length > 0) {
+        const ongoingIndex = roundsInfo.findIndex((r) => r && r.state != null && !/ended/i.test(r.state));
+        if (ongoingIndex !== -1) return ongoingIndex + 1;
+        return roundsInfo.length;
+      }
+      return null;
     }
 
     // Analyse un objet "game" renvoyé par l'API et émet les events correspondants
@@ -318,6 +429,7 @@
         currentRound = null;
         guessesSeenTotal = 0;
         gameState = null;
+        liveChallengeRound = null;
         persistState();
         GeoCompanion.emit('gameStart', game);
       }
@@ -325,9 +437,13 @@
       // 1) Détection "début de round" : le numéro de round a augmenté.
       //    Ça arrive typiquement quand le joueur clique sur "suivant", donc plus tard
       //    que la soumission du guess.
-      const round = game.round ?? game.roundNumber ?? game.currentRoundNumber;
+      const round = deriveRoundNumber(game);
       if (typeof round === 'number' && round !== currentRound) {
         currentRound = round;
+        // Recale le compteur dédié live challenge sur cette valeur fiable
+        // (HTTP), pour éviter qu'il ne dérive s'il avait avancé séparément
+        // via des events WebSocket entre-temps.
+        liveChallengeRound = round;
         persistState();
         GeoCompanion.emit('roundStart', game);
       }
@@ -357,6 +473,7 @@
       if (hasStateField) {
         if (roundStateEnded && roundEndEmittedRound !== round) {
           roundEndEmittedRound = round;
+          liveChallengeRound = round;
           if (hasRealGuesses) guessesSeenTotal = guesses.length;
           persistState();
           GeoCompanion.emit('roundEnd', hasRealGuesses ? game : lastGoodGameSnapshot || game);
@@ -462,10 +579,18 @@
           if (!data || !data.code) return;
 
           if (data.code === 'LiveChallengeRoundEnded') {
-            if (roundEndEmittedRound !== currentRound && lastGoodGameSnapshot) {
-              roundEndEmittedRound = currentRound;
+            // Le round qui vient de se terminer : on se fie au compteur
+            // dédié (liveChallengeRound) plutôt qu'à currentRound, qui peut
+            // ne jamais avoir été mis à jour si aucune requête HTTP avec un
+            // round exploitable n'est arrivée depuis le round précédent.
+            const endedRound = liveChallengeRound ?? currentRound ?? 1;
+            if (roundEndEmittedRound !== endedRound && lastGoodGameSnapshot) {
+              roundEndEmittedRound = endedRound;
               persistState();
-              GeoCompanion.emit('roundEnd', lastGoodGameSnapshot);
+              // On force le round sur le snapshot émis : extractRoundData()
+              // lit game.round, et le snapshot HTTP disponible peut être
+              // légèrement daté par rapport à ce round précis.
+              GeoCompanion.emit('roundEnd', { ...lastGoodGameSnapshot, round: endedRound });
             }
           } else if (data.code === 'LiveChallengeFinished') {
             if (gameState !== 'finished' && lastGoodGameSnapshot) {
@@ -474,8 +599,11 @@
               GeoCompanion.emit('gameEnd', lastGoodGameSnapshot);
             }
           } else if (data.code === 'LiveChallengeRoundStarted') {
-            // Pas de données de round dans ce message — sert juste de
-            // déclencheur pour nettoyer les panneaux de l'ancien round.
+            // Pas de données de round dans ce message — sert de déclencheur
+            // pour nettoyer les panneaux de l'ancien round, et fait avancer
+            // le compteur dédié pour le prochain "Ended".
+            liveChallengeRound = (liveChallengeRound ?? currentRound ?? 1) + 1;
+            persistState();
             GeoCompanion.emit('roundStart', lastGoodGameSnapshot || {});
           }
         });
@@ -915,7 +1043,15 @@
     let warnedMapOnce = false;
 
     function extractRoundData(game) {
-      const round = game.round ?? game.roundNumber ?? game.currentRoundNumber;
+      // Repli identique à apiDetectionModule::deriveRoundNumber (module
+      // séparé, pas de closure partagée) : certaines réponses live
+      // challenge n'ont aucun champ round exploitable à la racine.
+      let round = game.round ?? game.roundNumber ?? game.currentRoundNumber;
+      const roundsInfoForDerive = game.rounds;
+      if (typeof round !== 'number' && Array.isArray(roundsInfoForDerive) && roundsInfoForDerive.length > 0) {
+        const ongoingIndex = roundsInfoForDerive.findIndex((r) => r && r.state != null && !/ended/i.test(r.state));
+        round = ongoingIndex !== -1 ? ongoingIndex + 1 : roundsInfoForDerive.length;
+      }
 
       // Les infos du lieu réel du round sont généralement dans un tableau
       // "rounds" indexé par (round - 1).
@@ -1348,12 +1484,14 @@
       return `.${TLD_OVERRIDES[upper] || upper.toLowerCase()}`;
     }
 
-    // Convertit un code pays ISO 2 lettres en emoji drapeau (aucune image nécessaire).
-    function flagEmojiFromCode(code) {
+    // Convertit un code pays ISO 2 lettres en <img> de drapeau via flagcdn.com
+    // (gratuit, pas de clé). On utilisait un emoji drapeau Unicode avant,
+    // mais Chrome/Windows ne les rend pas du tout (juste les 2 lettres du
+    // code ISO côte à côte) — une image est fiable sur toutes plateformes.
+    function flagImgFromCode(code, { height = '1em', style = '' } = {}) {
       if (!code || code.length !== 2) return '';
-      const upper = code.toUpperCase();
-      const codePoints = [...upper].map((c) => 127397 + c.charCodeAt(0));
-      return String.fromCodePoint(...codePoints);
+      const lower = code.toLowerCase();
+      return `<img src="https://flagcdn.com/${lower}.svg" alt="${code.toUpperCase()}" style="height:${height}; width:auto; vertical-align:middle; display:inline-block; border-radius:2px; ${style}" onerror="this.style.visibility='hidden'">`;
     }
 
     // Déduit l'URL de la page pays sur plonkit.net à partir du nom anglais
@@ -1437,8 +1575,8 @@
     function renderRoundResult(panel, row) {
       panel.innerHTML = `
         <div style="display:flex; align-items:center; gap:16px; margin-bottom:12px;">
-          <div style="font-size:14vh; line-height:0.9; flex-shrink:0;">
-            ${flagEmojiFromCode(row.country_code)}
+          <div style="flex-shrink:0;">
+            ${flagImgFromCode(row.country_code, { height: '10vh', style: 'box-shadow:0 2px 10px rgba(0,0,0,0.4);' })}
           </div>
           <div style="flex:1; min-width:0;">
             <div class="gc-title" style="margin-bottom:8px;">
@@ -1848,7 +1986,7 @@
       { key: 'plaque_image_url', label: 'Plaque', type: 'image' },
       { key: 'bollard_image_url', label: 'Bollard', type: 'image' },
       { key: 'poteau_image_url', label: 'Poteau/Panneau', type: 'images', fullWidth: true },
-      { key: 'langue_text', label: 'Langue', type: 'text', fullWidth: true },
+      { key: 'langue_text', label: 'Langue', type: 'multitext', fullWidth: true },
     ];
 
     function countryInfoFieldDisplay(fieldConfig, value) {
@@ -1871,6 +2009,13 @@
               .join('')}
           </div>
         `;
+      }
+      if (fieldConfig.type === 'multitext') {
+        // white-space:pre-line préserve les retours à la ligne saisis (une
+        // langue par ligne par ex.) sans casser le rendu si le texte est long.
+        return `<span style="white-space:pre-line; ${
+          fieldConfig.key === 'langue_text' ? 'font-weight:bold; font-size:22px;' : ''
+        }">${escapeHtml(value)}</span>`;
       }
       return `<span style="${
         fieldConfig.key === 'langue_text' ? 'font-weight:bold; font-size:22px;' : ''
@@ -1907,7 +2052,9 @@
           const fieldConfig = COUNTRY_INFO_FIELDS.find((f) => f.key === key);
           const formEl = container.querySelector(`[data-field-form="${key}"]`);
           const currentValue = info[key] || '';
-          const isMulti = fieldConfig.type === 'images';
+          const isMultiUrl = fieldConfig.type === 'images'; // liste d'URLs (une par ligne, nettoyées)
+          const isFreeText = fieldConfig.type === 'multitext'; // texte libre multi-lignes (ex: langue)
+          const isTextarea = isMultiUrl || isFreeText;
 
           const actionsHtml = `
             <div class="gc-btn-row" style="margin-top:4px;">
@@ -1916,9 +2063,11 @@
             </div>
           `;
 
-          formEl.innerHTML = isMulti
+          formEl.innerHTML = isTextarea
             ? `
-              <textarea placeholder="Une URL d'image par ligne" class="gc-input gc-input--compact" style="min-height:60px;">${escapeHtml(
+              <textarea placeholder="${
+                isMultiUrl ? "Une URL d'image par ligne" : 'Une ligne par langue'
+              }" class="gc-input gc-input--compact" style="min-height:60px;">${escapeHtml(
                 currentValue
               )}</textarea>
               ${actionsHtml}
@@ -1930,7 +2079,7 @@
               ${actionsHtml}
             `;
 
-          const inputEl = formEl.querySelector(isMulti ? 'textarea' : 'input');
+          const inputEl = formEl.querySelector(isTextarea ? 'textarea' : 'input');
           stopKeyPropagation(inputEl);
 
           formEl.querySelector('[data-cancel-field]').addEventListener('click', () => {
@@ -1938,12 +2087,14 @@
           });
 
           formEl.querySelector('[data-save-field]').addEventListener('click', async () => {
-            const value = isMulti
+            const value = isMultiUrl
               ? inputEl.value
                   .split('\n')
                   .map((u) => u.trim())
                   .filter(Boolean)
                   .join('\n')
+              : isFreeText
+              ? inputEl.value.replace(/\n{3,}/g, '\n\n').trim() // garde les sauts de ligne, juste évite les blocs vides à rallonge
               : inputEl.value.trim();
             await GeoCompanion.countryInfo.setCountryInfoField(row.country_code, key, value || null);
             const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
@@ -2084,15 +2235,25 @@
       GM_setValue(LAST_DISPLAY_KEY, { row, visible: true });
     });
 
-    // Les panneaux résultat/tips n'ont d'intérêt qu'une fois le round terminé
-    // (pays révélé) — on les retire au début du round suivant pour ne pas
-    // laisser les infos de l'ancien round affichées pendant qu'on joue.
-    GeoCompanion.on('roundStart', () => {
+    // Retire les panneaux résultat/tips et oublie l'affichage persisté.
+    // Exposé sur GeoCompanion pour être réutilisable depuis d'autres modules
+    // (ex: le dashboard, qui les masque aussi au retour sur l'accueil — voir
+    // plus bas : en live challenge, la détection roundStart/gameEnd peut
+    // être en retard ou manquée, laissant ces panneaux affichés à tort une
+    // fois la partie terminée).
+    GeoCompanion.hideResultAndTipsPanels = function () {
       const panel = document.getElementById(PANEL_ID);
       if (panel) panel.remove();
       const tipsPanel = document.getElementById(TIPS_PANEL_ID);
       if (tipsPanel) tipsPanel.remove();
       GM_setValue(LAST_DISPLAY_KEY, { row: null, visible: false });
+    };
+
+    // Les panneaux résultat/tips n'ont d'intérêt qu'une fois le round terminé
+    // (pays révélé) — on les retire au début du round suivant pour ne pas
+    // laisser les infos de l'ancien round affichées pendant qu'on joue.
+    GeoCompanion.on('roundStart', () => {
+      GeoCompanion.hideResultAndTipsPanels();
     });
 
     // Restauration au chargement du script : si la page est rechargée juste
@@ -2145,7 +2306,7 @@
           width: clamp(340px, 21vw, 536px);
           max-height: 61vh;
           padding: 12px;
-          font-size: 14px;
+          font-size: clamp(11px, 0.95vw, 14px);
         `;
         document.body.appendChild(panel);
       }
@@ -2217,9 +2378,10 @@
                 padding:2px 10px; border-radius:10px; overflow:hidden;
                 background:${color.wash}; border-left:4px solid ${color.solid};
               ">
-                <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${flagEmojiFromCode(
-                  c.code
-                )} ${shortCountryName(c.code)}</span>
+                <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${flagImgFromCode(c.code, {
+                  height: '0.9em',
+                  style: 'margin-right:4px;',
+                })}${shortCountryName(c.code)}</span>
                 <span style="font-size:12px; opacity:0.9; white-space:nowrap; flex-shrink:0;">
                   ${c.count > 0 ? `${c.count} · ${c.successRate != null ? c.successRate + '%' : '-'}` : 'Jamais joué'}
                 </span>
@@ -2386,6 +2548,13 @@
     function checkHomepage() {
       if (isHomepage()) {
         renderDashboard();
+        // Filet de sécurité : en live challenge, la fin de partie/round
+        // n'est pas toujours détectée de façon fiable (voir apiDetectionModule),
+        // donc les panneaux résultat/tips de la dernière partie peuvent rester
+        // affichés à tort. De retour sur l'accueil, ils n'ont plus lieu d'être
+        // dans tous les cas — on les nettoie systématiquement ici, qu'ils
+        // aient déjà été masqués ou non.
+        if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
       } else {
         removeDashboard();
       }

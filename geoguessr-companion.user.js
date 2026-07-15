@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      8.4
+// @version      1.00
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -130,8 +130,8 @@
       }
 
       /* ==== Typo ==== */
-      .gc-title { font-weight: 700; font-size: 22px; font-style: italic; text-transform: uppercase; color: var(--ds-color-white-100, #fff); }
-      .gc-subtitle { font-weight: 700; font-size: 17px; margin-bottom: 8px; font-style: italic; text-transform: uppercase; color: var(--ds-color-white-100, #fff); }
+      .gc-title { font-weight: 700; font-size: 22px; font-style: italic; text-transform: capitalize; color: var(--ds-color-white-100, #fff); }
+      .gc-subtitle { font-weight: 700; font-size: 17px; margin-bottom: 8px; font-style: italic; text-transform: capitalize; color: var(--ds-color-white-100, #fff); }
       .gc-label { opacity: 0.75; font-weight: 700; font-size: 15px; }
       .gc-muted { opacity: 0.6; }
       .gc-muted-light { opacity: 0.45; }
@@ -147,15 +147,16 @@
         font-style: italic;
         font-weight: 700;
         text-align: center;
-        text-transform: uppercase;
+        text-transform: capitalize;
         text-shadow: var(--text-shadow, none);
         padding: 6px 10px;
       }
       .gc-btn:disabled { opacity: 0.6; cursor: default; }
       .gc-btn--block { width: 100%; }
       .gc-btn--flex { flex: 1; }
+      .gc-btn--flex-auto { flex: 1 1 auto; white-space: nowrap; }
       .gc-btn--lg { font-size: 16px; padding: 10px 0; border-radius: 8px; }
-      .gc-btn--xs { font-size: 11px; padding: 4px 0; }
+      .gc-btn--xs { font-size: 11px; padding: 0 4px; height: 24px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; }
       .gc-btn--primary { background: var(--gc-accent-gradient); }
       .gc-btn--jouer {
         background: linear-gradient(var(--ds-color-brand-30, #a685ff), var(--ds-color-brand-70, #4a2399));
@@ -174,7 +175,6 @@
 
       /* ==== Cartes ==== */
       .gc-card { background: var(--gc-bg-secondary); border-radius: 6px; padding: 7px 9px; font-size: 15px; }
-      .gc-card--compact { padding: 6px 8px; font-size: 13px; }
       .gc-card-header { display: flex; justify-content: space-between; align-items: center; }
 
       /* ==== Formulaires ==== */
@@ -221,14 +221,11 @@
       .gc-btn--icon-accent { color: var(--gc-accent); }
       .gc-btn--icon-danger { color: var(--gc-danger); }
       .gc-relative { position: relative; }
-      .gc-mt-2 { margin-top: 2px; }
-      .gc-mt-4 { margin-top: 4px; }
       .gc-mt-6 { margin-top: 6px; }
       .gc-mb-6 { margin-bottom: 6px; }
       .gc-mb-8 { margin-bottom: 8px; }
       .gc-mb-10 { margin-bottom: 10px; }
       .gc-shrink-0 { flex-shrink: 0; }
-      .gc-flex-wrap { display: flex; flex-wrap: wrap; }
       .gc-img-overlay-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; }
       .gc-toast {
         position: fixed;
@@ -337,13 +334,11 @@
 
       // 2) Détection "fin de round" :
       //    - Live challenge : chaque round a un champ state ("Ongoing"/"Ended")
-      //      dans game.rounds[] — c'est le vrai signal de fin de round (ex.
-      //      l'appel dédié "end-round"), indépendant du moment où CE joueur a
-      //      soumis son guess (les autres joueurs peuvent encore être en train
-      //      de deviner). Cette réponse ne contient toutefois pas les guesses
-      //      (guesses: null) — on complète avec le dernier snapshot qui en avait.
-      //    - Autres modes : ce champ n'existe pas, on retombe sur l'heuristique
-      //      historique "le nombre de guesses a augmenté".
+      //      dans game.rounds[] — signal fiable, indépendant du moment où CE
+      //      joueur guess (les autres peuvent encore jouer). Sa réponse n'a
+      //      pas les guesses (null) : complété via le dernier snapshot qui en avait.
+      //    - Autres modes : pas de ce champ, on retombe sur l'heuristique
+      //      "le nombre de guesses a augmenté".
       const guesses = game.player?.guesses || game.guesses;
       const roundsInfo = game.rounds || [];
       const currentRoundInfo = typeof round === 'number' ? roundsInfo[round - 1] : null;
@@ -1186,9 +1181,6 @@
     GeoCompanion.tips = { listTipsForCountry, addTip, updateTip, deleteTip };
   })();
 
-  // ============================================================
-  // MODULE: countryInfo
-  // ------------------------------------------------------------
   // ============================================================
   // MODULE: countryInfo
   // ------------------------------------------------------------
@@ -2200,8 +2192,8 @@
 
       panel.innerHTML = `
         <div class="gc-card-header gc-mb-6 gc-shrink-0">
-          <div style="font-weight:bold; font-size:16px;">Mes stats</div>
-          <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--danger gc-btn--pill">🗑️</button>
+          <div class="gc-title" style="font-size:16px;">Mes stats</div>
+          <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--danger gc-btn--pill" style="font-style:normal; padding:5px 10px;">🗑️</button>
         </div>
         <hr class="gc-hr gc-hr--dashed" style="margin:0 0 10px;">
         <div class="gc-btn-row gc-mb-8 gc-shrink-0">
@@ -2213,12 +2205,12 @@
           `
           ).join('')}
         </div>
-        <div class="gc-flex-wrap gc-mb-10 gc-shrink-0" style="gap:4px;">
+        <div class="gc-btn-row gc-mb-10 gc-shrink-0">
           ${CONTINENT_ORDER.map(
             (c) => `
-            <button data-dash-continent="${c}" class="gc-btn gc-btn--pill gc-btn--xs ${
+            <button data-dash-continent="${c}" class="gc-btn gc-btn--flex-auto gc-btn--pill gc-btn--xs ${
               c === dashboardActiveContinent ? 'gc-btn--jouer' : 'gc-btn--secondary'
-            }">${CONTINENT_LABELS[c]}</button>
+            }" style="padding-left:6px; padding-right:6px;">${CONTINENT_LABELS[c]}</button>
           `
           ).join('')}
         </div>

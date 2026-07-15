@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.31
+// @version      1.32
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -465,8 +465,21 @@
       const hasStateField = currentRoundInfo?.state != null;
       const roundStateEnded = hasStateField && /ended/i.test(currentRoundInfo.state);
       const hasRealGuesses = Array.isArray(guesses) && guesses.length > 0;
+      // Une réponse peut révéler les données du lieu réel (pays/coordonnées)
+      // du round en cours même si CE joueur n'a lui-même rien guessé (round
+      // terminé sans qu'il ait répondu à temps) — on capture aussi ce cas.
+      // Avant ce correctif, le snapshot restait bloqué sur un round
+      // précédent dans ce cas, et le round-end ne trouvait alors aucun pays
+      // exploitable (rien à afficher, roundRecorded abandonnait en silence).
+      const currentRoundHasLocationData =
+        currentRoundInfo &&
+        (currentRoundInfo.countryCode != null ||
+          currentRoundInfo.streakLocationCode != null ||
+          currentRoundInfo.question?.panoramaQuestionPayload?.panorama?.countryCode != null ||
+          currentRoundInfo.lat != null ||
+          currentRoundInfo.location?.lat != null);
 
-      if (hasRealGuesses) {
+      if (hasRealGuesses || currentRoundHasLocationData) {
         lastGoodGameSnapshot = game;
       }
 
@@ -593,10 +606,10 @@
               GeoCompanion.emit('roundEnd', { ...lastGoodGameSnapshot, round: endedRound });
             }
           } else if (data.code === 'LiveChallengeFinished') {
-            if (gameState !== 'finished' && lastGoodGameSnapshot) {
+            if (gameState !== 'finished') {
               gameState = 'finished';
               persistState();
-              GeoCompanion.emit('gameEnd', lastGoodGameSnapshot);
+              GeoCompanion.emit('gameEnd', lastGoodGameSnapshot || {});
             }
           } else if (data.code === 'LiveChallengeRoundStarted') {
             // Pas de données de round dans ce message — sert de déclencheur
@@ -2254,6 +2267,20 @@
     // laisser les infos de l'ancien round affichées pendant qu'on joue.
     GeoCompanion.on('roundStart', () => {
       GeoCompanion.hideResultAndTipsPanels();
+    });
+
+    // Une fois la partie terminée (dernier round révélé, leaderboard/résultats
+    // final affichés par GeoGuessr), nos panneaux du dernier round n'ont plus
+    // lieu d'être par-dessus cet écran — on les retire, sans attendre un
+    // éventuel retour manuel sur l'accueil. Léger délai avant de le faire :
+    // gameEnd peut arriver quasi en même temps que le roundEnd du tout
+    // dernier round, dont l'enregistrement (Supabase) + l'affichage sont
+    // asynchrones — sans ce délai, on risquerait de masquer le panneau avant
+    // même que le résultat du dernier round ait eu le temps de s'afficher.
+    GeoCompanion.on('gameEnd', () => {
+      setTimeout(() => {
+        GeoCompanion.hideResultAndTipsPanels();
+      }, 3000);
     });
 
     // Restauration au chargement du script : si la page est rechargée juste

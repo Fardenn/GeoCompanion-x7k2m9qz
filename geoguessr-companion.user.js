@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.34
+// @version      1.35
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -367,6 +367,15 @@
     // réponse qui signale la vraie fin de round, ex. l'appel "end-round",
     // n'a pas les données du guess — on les récupère depuis ce snapshot).
     let lastGoodGameSnapshot = null;
+    // Round pour lequel lastGoodGameSnapshot contient un vrai guess (par
+    // opposition à juste les données de lieu). Évite qu'une réponse sans
+    // guess pour ce même round (ex: l'hôte d'un live challenge appelle
+    // /advance-round ou /end-round pour faire avancer la partie — lui seul
+    // fait ces appels) n'écrase un snapshot qui contenait déjà SON guess,
+    // ce qui le ferait disparaître du round enregistré à tort (bug repéré :
+    // seul l'hôte perdait son guess, les autres joueurs n'appelant jamais
+    // ces endpoints n'étaient pas concernés).
+    let lastGoodGameSnapshotRoundWithGuess = null;
     // Live challenge uniquement : les events WebSocket de début/fin de round
     // n'incluent pas le numéro de round (juste un code). Sans ce compteur
     // dédié, on dépendait de "currentRound" — qui ne se met à jour que si
@@ -444,6 +453,8 @@
         guessesSeenTotal = 0;
         gameState = null;
         liveChallengeRound = null;
+        lastGoodGameSnapshot = null;
+        lastGoodGameSnapshotRoundWithGuess = null;
         isLiveChallengeGame = isLiveChallengeResponse;
         persistState();
         GeoCompanion.emit('gameStart', game);
@@ -486,7 +497,15 @@
           currentRoundInfo.lat != null ||
           currentRoundInfo.location?.lat != null);
 
-      if (hasRealGuesses || currentRoundHasLocationData) {
+      if (hasRealGuesses) {
+        // Toujours prioritaire : données de guess fraîches pour ce round.
+        lastGoodGameSnapshot = game;
+        lastGoodGameSnapshotRoundWithGuess = round;
+      } else if (currentRoundHasLocationData && lastGoodGameSnapshotRoundWithGuess !== round) {
+        // On ne capture les données de lieu seules que si on n'a pas déjà
+        // un snapshot avec un vrai guess pour CE round — sinon un appel
+        // sans guess (ex: l'hôte qui fait avancer la partie) écraserait le
+        // snapshot qui contenait son propre guess.
         lastGoodGameSnapshot = game;
       }
 

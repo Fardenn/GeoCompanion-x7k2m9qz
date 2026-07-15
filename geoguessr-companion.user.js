@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.20
+// @version      1.21
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -1396,8 +1396,7 @@
         panel.style.cssText = `
           top: 20px;
           right: 20px;
-          width: 33vw;
-          max-width: 480px;
+          width: clamp(300px, 18.75vw, 480px);
           max-height: 80vh;
           overflow-y: auto;
           font-size: 20px;
@@ -1416,8 +1415,7 @@
         panel.style.cssText = `
           top: 20px;
           left: 20px;
-          width: 480px;
-          max-width: 38vw;
+          width: clamp(300px, 18.75vw, 480px);
           height: auto;
           max-height: 85vh;
           padding: 14px;
@@ -2144,8 +2142,7 @@
         panel.style.cssText = `
           top: 70px;
           right: 304px;
-          width: 536px;
-          max-width: 45vw;
+          width: clamp(340px, 21vw, 536px);
           max-height: 61vh;
           padding: 12px;
           font-size: 14px;

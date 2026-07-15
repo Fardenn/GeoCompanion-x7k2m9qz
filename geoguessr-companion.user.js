@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.32
+// @version      1.34
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -378,6 +378,10 @@
     // donc indépendamment de si HTTP a suivi ou non — best-effort, à confirmer
     // sur le terrain.
     let liveChallengeRound = savedState?.liveChallengeRound ?? null;
+    // Live challenge : passe à true dès qu'une réponse contient un champ
+    // rounds[].state (unique à ce mode). Sert de garde pour couper toute
+    // émission d'event basée sur HTTP pour ce mode — voir handleGameObject.
+    let isLiveChallengeGame = savedState?.isLiveChallengeGame ?? false;
 
     function persistState() {
       GM_setValue(STATE_KEY, {
@@ -387,6 +391,7 @@
         gameState,
         roundEndEmittedRound,
         liveChallengeRound,
+        isLiveChallengeGame,
       });
     }
 
@@ -422,6 +427,15 @@
       if (!token) return;
 
       const isNewGame = currentGameId !== token;
+      // Champ rounds[].state : unique au live challenge, présent dès la
+      // première réponse de ce mode. Sert à savoir si on doit couper toute
+      // émission d'event basée sur HTTP pour cette partie (voir plus bas) —
+      // en live challenge, HTTP s'est révélé peu fiable comme déclencheur
+      // (un joueur qui n'interagit plus après son guess ne génère plus
+      // aucune requête, donc ne voit jamais la transition côté HTTP) ; seul
+      // le WebSocket ("LiveChallengeRoundStarted/Ended/Finished", voir plus
+      // bas) déclenche désormais roundStart/roundEnd/gameEnd pour ce mode.
+      const isLiveChallengeResponse = Array.isArray(game.rounds) && game.rounds.some((r) => r && r.state != null);
 
       if (isNewGame) {
         // reset état pour la nouvelle partie
@@ -430,47 +444,40 @@
         guessesSeenTotal = 0;
         gameState = null;
         liveChallengeRound = null;
+        isLiveChallengeGame = isLiveChallengeResponse;
         persistState();
         GeoCompanion.emit('gameStart', game);
+      } else if (isLiveChallengeResponse && !isLiveChallengeGame) {
+        // Au cas où la toute première réponse de cette partie n'avait pas
+        // encore ce champ (ordre d'arrivée des requêtes non garanti).
+        isLiveChallengeGame = true;
+        persistState();
       }
 
       // 1) Détection "début de round" : le numéro de round a augmenté.
-      //    Ça arrive typiquement quand le joueur clique sur "suivant", donc plus tard
-      //    que la soumission du guess.
+      //    Live challenge : on garde currentRound à jour (utile comme repli
+      //    pour le compteur WS dédié, voir plus bas) mais on n'émet PLUS
+      //    roundStart ici — seul le WS "LiveChallengeRoundStarted" le fait.
+      //    Autres modes : inchangé, HTTP reste le seul mécanisme disponible.
       const round = deriveRoundNumber(game);
       if (typeof round === 'number' && round !== currentRound) {
         currentRound = round;
-        // Recale le compteur dédié live challenge sur cette valeur fiable
-        // (HTTP), pour éviter qu'il ne dérive s'il avait avancé séparément
-        // via des events WebSocket entre-temps.
-        liveChallengeRound = round;
         persistState();
-        GeoCompanion.emit('roundStart', game);
+        if (!isLiveChallengeGame) {
+          GeoCompanion.emit('roundStart', game);
+        }
       }
 
-      // 2) Détection "fin de round" :
-      //    - Live challenge : chaque round a un champ state ("Ongoing"/"Ended")
-      //      dans game.rounds[] — signal fiable, indépendant du moment où CE
-      //      joueur guess (les autres peuvent encore jouer). Sa réponse n'a
-      //      pas les guesses (null) : complété via le dernier snapshot qui en avait.
-      //    - Autres modes : pas de ce champ, on retombe sur l'heuristique
-      //      "le nombre de guesses a augmenté".
+      // 2) Snapshot le plus à jour possible, pour extractRoundData — utile
+      //    quel que soit le mode et que l'event soit déclenché par HTTP ou
+      //    WS (le message WS ne contient jamais les données du round).
       const guesses = game.player?.guesses || game.guesses;
       const roundsInfo = game.rounds || [];
       const currentRoundInfo = typeof round === 'number' ? roundsInfo[round - 1] : null;
-      // Le champ state existe uniquement en live challenge — sa seule présence
-      // (peu importe sa valeur "Ongoing"/"Ended") indique qu'il faut se fier à
-      // lui, et surtout ne PAS utiliser l'heuristique guesses en parallèle
-      // (sinon double émission : une fois au guess, une fois à "Ended").
-      const hasStateField = currentRoundInfo?.state != null;
-      const roundStateEnded = hasStateField && /ended/i.test(currentRoundInfo.state);
       const hasRealGuesses = Array.isArray(guesses) && guesses.length > 0;
       // Une réponse peut révéler les données du lieu réel (pays/coordonnées)
       // du round en cours même si CE joueur n'a lui-même rien guessé (round
       // terminé sans qu'il ait répondu à temps) — on capture aussi ce cas.
-      // Avant ce correctif, le snapshot restait bloqué sur un round
-      // précédent dans ce cas, et le round-end ne trouvait alors aucun pays
-      // exploitable (rien à afficher, roundRecorded abandonnait en silence).
       const currentRoundHasLocationData =
         currentRoundInfo &&
         (currentRoundInfo.countryCode != null ||
@@ -483,28 +490,26 @@
         lastGoodGameSnapshot = game;
       }
 
-      if (hasStateField) {
-        if (roundStateEnded && roundEndEmittedRound !== round) {
-          roundEndEmittedRound = round;
-          liveChallengeRound = round;
-          if (hasRealGuesses) guessesSeenTotal = guesses.length;
-          persistState();
-          GeoCompanion.emit('roundEnd', hasRealGuesses ? game : lastGoodGameSnapshot || game);
-        }
-      } else if (hasRealGuesses && guesses.length > guessesSeenTotal) {
+      // 3) Détection "fin de round" — live challenge : plus aucune émission
+      //    ici (WS seul, voir plus bas), on ne fait que maintenir
+      //    guessesSeenTotal pour rester cohérent si jamais on repasse par un
+      //    mode classique dans le même onglet. Autres modes : heuristique
+      //    "le nombre de guesses a augmenté", inchangée.
+      if (!isLiveChallengeGame && hasRealGuesses && guesses.length > guessesSeenTotal) {
         guessesSeenTotal = guesses.length;
         persistState();
         GeoCompanion.emit('roundEnd', game);
       }
 
-      // Détection fin de partie (le champ exact peut varier selon le mode : classic, battle royale, live challenge...)
+      // 4) Détection fin de partie — même logique : plus d'émission HTTP en
+      //    live challenge, uniquement via WS "LiveChallengeFinished".
       const roundCount = game.roundCount ?? game.numberOfRounds;
       const finished =
         game.state?.toLowerCase() === 'finished' ||
         game.status?.toLowerCase() === 'finished' ||
         (Array.isArray(guesses) && roundCount != null && guesses.length === roundCount);
 
-      if (finished && gameState !== 'finished') {
+      if (!isLiveChallengeGame && finished && gameState !== 'finished') {
         gameState = 'finished';
         persistState();
         GeoCompanion.emit('gameEnd', game);
@@ -567,17 +572,20 @@
     };
 
     // --- Hook WebSocket (live challenge uniquement) ---
-    // En live challenge, GeoGuessr pousse les vrais events de fin de round/
-    // partie via WebSocket ("LiveChallengeRoundEnded", "LiveChallengeFinished"),
-    // pas seulement via des réponses HTTP. Un joueur qui a déjà guessé et ne
-    // fait plus aucune requête HTTP ensuite ne verrait jamais la transition
-    // "Ended" avec le seul hook fetch/XHR — d'où ce hook supplémentaire,
-    // confirmé nécessaire par capture réseau (le round-end HTTP ne se
-    // déclenchait pas de façon fiable à plusieurs joueurs).
+    // En live challenge, roundStart/roundEnd/gameEnd sont déclenchés
+    // UNIQUEMENT depuis ce hook (voir handleGameObject plus haut, qui coupe
+    // volontairement ces émissions pour ce mode dès qu'il est détecté).
+    // HTTP s'est révélé peu fiable comme déclencheur : un joueur qui a déjà
+    // guessé et ne fait plus aucune requête HTTP ensuite ne verrait jamais
+    // la transition "Ended" avec le seul hook fetch/XHR (confirmé par
+    // capture réseau — le round-end HTTP ne se déclenchait pas de façon
+    // fiable à plusieurs joueurs). GeoGuessr pousse les vrais events via
+    // WebSocket ("LiveChallengeRoundStarted/Ended/Finished"), ça reste donc
+    // la seule source de vérité pour ces transitions dans ce mode.
     // Ces messages WS ne contiennent pas les données du round (juste un code
-    // + gameId), donc on les utilise comme simple déclencheur fiable, et on
-    // reconstruit l'event à partir du dernier snapshot HTTP connu (déjà
-    // utilisé comme filet de sécurité pour le cas classique aussi).
+    // + gameId), donc on les utilise comme simple déclencheur, et on
+    // reconstruit l'event à partir du dernier snapshot HTTP connu (capturé
+    // par handleGameObject, qui continue lui de tourner pour ça).
     const OriginalWebSocket = pageWindow.WebSocket;
     if (typeof OriginalWebSocket === 'function') {
       pageWindow.WebSocket = function (...args) {
@@ -2269,19 +2277,13 @@
       GeoCompanion.hideResultAndTipsPanels();
     });
 
-    // Une fois la partie terminée (dernier round révélé, leaderboard/résultats
-    // final affichés par GeoGuessr), nos panneaux du dernier round n'ont plus
-    // lieu d'être par-dessus cet écran — on les retire, sans attendre un
-    // éventuel retour manuel sur l'accueil. Léger délai avant de le faire :
-    // gameEnd peut arriver quasi en même temps que le roundEnd du tout
-    // dernier round, dont l'enregistrement (Supabase) + l'affichage sont
-    // asynchrones — sans ce délai, on risquerait de masquer le panneau avant
-    // même que le résultat du dernier round ait eu le temps de s'afficher.
-    GeoCompanion.on('gameEnd', () => {
-      setTimeout(() => {
-        GeoCompanion.hideResultAndTipsPanels();
-      }, 3000);
-    });
+    // Pas de masquage sur gameEnd ici : cet event se déclenche en pratique
+    // au moment où le DERNIER round se termine (quasi simultané avec son
+    // roundEnd), pas quand le joueur a fini de regarder l'écran de résultats/
+    // leaderboard final — masquer dessus retirait donc le panneau bien avant
+    // la vraie fin de la partie côté joueur. Le nettoyage a lieu au retour
+    // sur l'accueil à la place (voir checkHomepage plus bas), qui correspond
+    // au moment où le joueur a réellement quitté la partie.
 
     // Restauration au chargement du script : si la page est rechargée juste
     // après la fin d'un round (avant le round suivant), on réaffiche

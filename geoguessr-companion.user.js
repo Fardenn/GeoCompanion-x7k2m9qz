@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.36
+// @version      1.38
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -1092,11 +1092,24 @@
       const guess = guesses[guesses.length - 1] || {};
 
       // Live challenge : les coordonnées réelles sont imbriquées dans
-      // answer.coordinateAnswerPayload.coordinate plutôt qu'à plat sur roundInfo.
+      // answer.coordinateAnswerPayload.coordinate — mais ce champ "answer"
+      // ne semble disponible que pour l'hôte (qui seul appelle advance-round/
+      // end-round, dont la réponse inclut la révélation complète). Pour les
+      // autres joueurs, on retombe sur les coordonnées du panorama lui-même
+      // (question.panoramaQuestionPayload.panorama), déjà utilisées comme
+      // repli fiable pour countryCode juste en dessous — la position du
+      // panorama EST la position réelle du round, donc ce repli est valide
+      // pour tout le monde, pas seulement en dernier recours.
       const actualLat =
-        roundInfo.lat ?? roundInfo.location?.lat ?? roundInfo.answer?.coordinateAnswerPayload?.coordinate?.lat;
+        roundInfo.lat ??
+        roundInfo.location?.lat ??
+        roundInfo.answer?.coordinateAnswerPayload?.coordinate?.lat ??
+        roundInfo.question?.panoramaQuestionPayload?.panorama?.lat;
       const actualLng =
-        roundInfo.lng ?? roundInfo.location?.lng ?? roundInfo.answer?.coordinateAnswerPayload?.coordinate?.lng;
+        roundInfo.lng ??
+        roundInfo.location?.lng ??
+        roundInfo.answer?.coordinateAnswerPayload?.coordinate?.lng ??
+        roundInfo.question?.panoramaQuestionPayload?.panorama?.lng;
       const guessLat = guess.lat ?? guess.position?.lat;
       const guessLng = guess.lng ?? guess.position?.lng;
       // Pas de code pays direct en live challenge (juste des coordonnées) —
@@ -2326,6 +2339,17 @@
       return /^\/([a-z]{2})?\/?$/i.test(pageWindow.location.pathname);
     }
 
+    // URL qui correspond à une partie en cours (classique, challenge, live
+    // challenge, battle royale, duels...), écran de résultats/leaderboard
+    // inclus (reste sous ce même chemin, avec le même token). Sert à savoir
+    // qu'on a bien QUITTÉ une partie, indépendamment de la destination
+    // (accueil ou ailleurs) — voir checkHomepage.
+    function isGameplayUrl(pathname) {
+      return /\/(game|live-challenge|challenge|battle-royale|duels)\//i.test(pathname);
+    }
+
+    let wasInGameplayUrl = isGameplayUrl(pageWindow.location.pathname);
+
     function removeDashboard() {
       const el = document.getElementById(DASHBOARD_ID);
       if (el) el.remove();
@@ -2583,6 +2607,7 @@
     }
 
     function checkHomepage() {
+      const nowInGameplayUrl = isGameplayUrl(pageWindow.location.pathname);
       if (isHomepage()) {
         renderDashboard();
         // Filet de sécurité : en live challenge, la fin de partie/round
@@ -2594,7 +2619,15 @@
         if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
       } else {
         removeDashboard();
+        // Complète le filet ci-dessus pour le cas où le joueur quitte la
+        // partie vers une page qui n'est ni l'accueil ni une page de jeu
+        // (lobby, profil...) — sans ça, les panneaux restaient affichés tant
+        // qu'on ne repassait pas explicitement par l'accueil.
+        if (wasInGameplayUrl && !nowInGameplayUrl && GeoCompanion.hideResultAndTipsPanels) {
+          GeoCompanion.hideResultAndTipsPanels();
+        }
       }
+      wasInGameplayUrl = nowInGameplayUrl;
     }
 
     // Filet de sécurité indépendant du routing : dès qu'une partie démarre

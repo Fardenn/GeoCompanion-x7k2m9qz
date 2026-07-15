@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      5.8
+// @version      8.4
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -59,6 +59,197 @@
   // Payload : l'objet "game" tel que renvoyé par l'API GeoGuessr
 
   // ============================================================
+  // CORE: thème (variables CSS injectées, alignées sur le vrai
+  // thème GeoGuessr)
+  // ------------------------------------------------------------
+  // Les couleurs/rayons/etc. sont des alias vers les vraies variables
+  // CSS de GeoGuessr (--ds-color-*, --surface-radius-*...), avec repli
+  // sur les valeurs exactes relevées manuellement dans leur CSS si ces
+  // variables ne sont pas exposées (ex: var(--ds-color-brand-50, #7950e5)).
+  // La résolution se fait nativement par le navigateur via CSS, pas
+  // besoin de scanner nous-mêmes leurs feuilles de style pour ça.
+  // Centralise tout en un seul endroit — un seul thème à ajuster au
+  // lieu de chercher/remplacer des codes hex dans tout le fichier.
+  // ============================================================
+  function injectThemeStyles() {
+    if (document.getElementById('geo-companion-theme')) return; // déjà injecté
+
+    // Police réellement utilisée par GeoGuessr sur cette page (fonctionne
+    // même si leur police maison "Geoguessr Sans" n'est pas publiquement
+    // accessible — on hérite simplement de la valeur déjà chargée par eux).
+    // Sert de repli si var(--default-font) n'est pas trouvable.
+    let detectedFont = null;
+    try {
+      const bodyFont = pageWindow.getComputedStyle(document.body).fontFamily;
+      if (bodyFont && bodyFont.trim()) detectedFont = bodyFont;
+    } catch (e) {
+      /* garde le repli générique */
+    }
+
+    const style = document.createElement('style');
+    style.id = 'geo-companion-theme';
+    style.textContent = `
+      :root {
+        /* Alias vers leur design system quand disponible (--ds-color-*),
+           avec repli sur les valeurs exactes qu'on leur a vues (relevées
+           manuellement dans leur CSS) si ces variables ne sont pas trouvées. */
+        --gc-bg: var(--ds-color-purple-100, #171235);
+        --gc-bg-gradient: linear-gradient(160deg, var(--ds-color-purple-90, #211a4c), var(--ds-color-purple-100, #171235));
+        --gc-bg-secondary: var(--ds-color-purple-90, #211a4c);
+        --gc-bg-secondary-hover: var(--ds-color-purple-80, #393273);
+        --gc-accent: var(--ds-color-brand-50, #7950e5);
+        --gc-accent-gradient: linear-gradient(135deg, var(--ds-color-brand-30, #a685ff), var(--ds-color-brand-50, #7950e5));
+        --gc-danger: var(--ds-color-red-50, #e94555);
+        --gc-danger-gradient: linear-gradient(135deg, var(--ds-color-red-20, #f75c5f), var(--ds-color-red-50, #e94555));
+        --gc-danger-bg: rgba(233, 69, 85, 0.14);
+        --gc-success: var(--ds-color-green-50, #97e851);
+        --gc-text: var(--ds-color-white-100, #fff);
+        --gc-border: 1px solid var(--ds-color-white-10, rgba(255, 255, 255, 0.1));
+        --gc-radius: var(--surface-radius-inner, 0.75rem);
+        /* var(--default-font) = variable réelle de GeoGuessr (héritée en live,
+           toujours synchronisée) ; repli sur la police détectée au chargement,
+           puis repli générique si rien n'est trouvable du tout. */
+        --gc-font: var(--default-font, ${detectedFont ? detectedFont.replace(/"/g, "'") : "-apple-system, sans-serif"});
+      }
+
+      /* ==== Panneaux ==== */
+      .gc-panel {
+        position: fixed;
+        display: flex;
+        flex-direction: column;
+        background: var(--gc-bg-gradient);
+        color: var(--gc-text);
+        border-radius: var(--gc-radius);
+        border: var(--gc-border);
+        padding: 16px;
+        font-family: var(--gc-font);
+        z-index: 999999;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        line-height: 1.4;
+        box-sizing: border-box;
+      }
+
+      /* ==== Typo ==== */
+      .gc-title { font-weight: 700; font-size: 22px; font-style: italic; text-transform: uppercase; color: var(--ds-color-white-100, #fff); }
+      .gc-subtitle { font-weight: 700; font-size: 17px; margin-bottom: 8px; font-style: italic; text-transform: uppercase; color: var(--ds-color-white-100, #fff); }
+      .gc-label { opacity: 0.75; font-weight: 700; font-size: 15px; }
+      .gc-muted { opacity: 0.6; }
+      .gc-muted-light { opacity: 0.45; }
+
+      /* ==== Boutons ==== */
+      .gc-btn {
+        border: none;
+        cursor: pointer;
+        border-radius: 6px;
+        color: var(--ds-color-white-100, #fff);
+        font-family: var(--gc-font);
+        font-size: var(--button-font-size, var(--font-size-14, 13px));
+        font-style: italic;
+        font-weight: 700;
+        text-align: center;
+        text-transform: uppercase;
+        text-shadow: var(--text-shadow, none);
+        padding: 6px 10px;
+      }
+      .gc-btn:disabled { opacity: 0.6; cursor: default; }
+      .gc-btn--block { width: 100%; }
+      .gc-btn--flex { flex: 1; }
+      .gc-btn--lg { font-size: 16px; padding: 10px 0; border-radius: 8px; }
+      .gc-btn--xs { font-size: 11px; padding: 4px 0; }
+      .gc-btn--primary { background: var(--gc-accent-gradient); }
+      .gc-btn--jouer {
+        background: linear-gradient(var(--ds-color-brand-30, #a685ff), var(--ds-color-brand-70, #4a2399));
+        text-shadow: 0 0.0625rem 0.125rem var(--ds-color-purple-100, #171235);
+        box-shadow:
+          0 0.275rem 1.125rem rgba(0, 0, 0, 0.25),
+          inset 0 0.0625rem 0 var(--ds-color-white-20, rgba(255, 255, 255, 0.2)),
+          inset 0 -0.125rem 0 rgba(0, 0, 0, 0.3);
+        padding-bottom: 0.125rem;
+      }
+      .gc-btn--secondary { background: var(--gc-bg-secondary-hover); }
+      .gc-btn--danger { background: var(--gc-danger-bg); color: var(--gc-danger); }
+      .gc-btn--icon { background: none; padding: 2px 4px; font-size: 15px; }
+      .gc-btn--icon-overlay { background: rgba(0, 0, 0, 0.55); border-radius: 5px; padding: 4px 6px; font-size: 16px; }
+      .gc-btn-row { display: flex; gap: 4px; }
+
+      /* ==== Cartes ==== */
+      .gc-card { background: var(--gc-bg-secondary); border-radius: 6px; padding: 7px 9px; font-size: 15px; }
+      .gc-card--compact { padding: 6px 8px; font-size: 13px; }
+      .gc-card-header { display: flex; justify-content: space-between; align-items: center; }
+
+      /* ==== Formulaires ==== */
+      .gc-input {
+        width: 100%;
+        margin-top: 4px;
+        border-radius: 4px;
+        border: none;
+        padding: 6px;
+        box-sizing: border-box;
+        background: #1a1a28;
+        color: white;
+        font-family: var(--gc-font);
+        font-size: 15px;
+      }
+      .gc-input--compact { font-size: 13px; padding: 4px; }
+      textarea.gc-input { resize: vertical; }
+
+      /* ==== Mise en page ==== */
+      .gc-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      .gc-grid-2--compact { gap: 3px 4px; }
+      .gc-span-2 { grid-column: 1 / span 2; }
+      .gc-hr { opacity: 0.15; margin: 12px 0; border-color: #888; }
+      .gc-hr--dashed { border-style: dashed; opacity: 0.3; }
+      .gc-btn--pill { border-radius: 999px; }
+      .gc-panel--outlined {
+        border-radius: var(--surface-radius-outer, 1rem);
+        border: 0.25rem solid oklch(from var(--ds-color-purple-100, #171235) l c h / 90%);
+        outline: 0.0625rem solid var(--ds-color-purple-80, #393273);
+        outline-offset: 0;
+        background-color: oklch(from var(--ds-color-purple-100, #171235) l c h / 90%);
+        background-image: linear-gradient(
+          to bottom,
+          oklch(from var(--ds-color-white-100, #fff) l c h / 4%) 0,
+          oklch(from var(--ds-color-white-100, #fff) l c h / 1%) 2.5rem
+        );
+        background-clip: padding-box;
+        background-origin: padding-box;
+        background-repeat: no-repeat;
+        box-shadow: var(--surface-primary-glow, 0 0 24px rgba(121, 80, 229, 0.25), 0 4px 20px rgba(0, 0, 0, 0.4));
+      }
+      .gc-link { color: var(--gc-accent); text-decoration: underline; }
+      .gc-img { border-radius: 5px; background: #111; display: block; cursor: zoom-in; }
+      .gc-btn--icon-accent { color: var(--gc-accent); }
+      .gc-btn--icon-danger { color: var(--gc-danger); }
+      .gc-relative { position: relative; }
+      .gc-mt-2 { margin-top: 2px; }
+      .gc-mt-4 { margin-top: 4px; }
+      .gc-mt-6 { margin-top: 6px; }
+      .gc-mb-6 { margin-bottom: 6px; }
+      .gc-mb-8 { margin-bottom: 8px; }
+      .gc-mb-10 { margin-bottom: 10px; }
+      .gc-shrink-0 { flex-shrink: 0; }
+      .gc-flex-wrap { display: flex; flex-wrap: wrap; }
+      .gc-img-overlay-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; }
+      .gc-toast {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--gc-bg);
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-family: var(--gc-font);
+        font-size: 14px;
+        z-index: 9999999;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        max-width: 80vw;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+  injectThemeStyles();
+
+  // ============================================================
   // CORE: notify (notifications discrètes, non bloquantes)
   // ------------------------------------------------------------
   // Point d'entrée unique pour signaler une erreur à l'utilisateur —
@@ -66,59 +257,16 @@
   // (bloquant). Toast discret en bas de l'écran, auto-disparaît ;
   // le détail technique reste toujours loggé en console à côté.
   // ============================================================
-  // ============================================================
-  // CORE: thème (variables CSS injectées une seule fois)
-  // ------------------------------------------------------------
-  // Centralise toutes les couleurs/dégradés en un seul endroit —
-  // au lieu de chercher/remplacer des codes hex dans tout le
-  // fichier pour ajuster le thème, on modifie juste les variables
-  // ci-dessous. Palette basée sur le brand book officiel GeoGuessr
-  // (design.geoguessr.com/the-brand/colors).
-  // ============================================================
-  function injectThemeStyles() {
-    if (document.getElementById('geo-companion-theme')) return; // déjà injecté
-    const style = document.createElement('style');
-    style.id = 'geo-companion-theme';
-    style.textContent = `
-      :root {
-        --gc-bg: #1a1a2e;
-        --gc-bg-gradient: linear-gradient(160deg, #23223f, #14131f);
-        --gc-bg-secondary: #2a2a3d;
-        --gc-bg-secondary-hover: #33334a;
-        --gc-accent: #7950e5;
-        --gc-accent-gradient: linear-gradient(135deg, #9171f0, #7950e5);
-        --gc-danger: #e94560;
-        --gc-danger-gradient: linear-gradient(135deg, #ef6478, #e94560);
-        --gc-danger-bg: #3a1620;
-        --gc-text: #f0f0f0;
-      }
-    `;
-    document.head.appendChild(style);
-  }
-  injectThemeStyles();
 
   GeoCompanion.notify = function (message, type = 'error') {
-    const colors = { error: 'var(--gc-danger)', success: '#4ade80', info: 'var(--gc-accent)' };
+    const colors = { error: 'var(--gc-danger)', success: 'var(--gc-success)', info: 'var(--gc-accent)' };
     const color = colors[type] || colors.error;
 
     const toast = document.createElement('div');
+    toast.className = 'gc-toast';
     toast.textContent = message;
-    toast.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: var(--gc-bg);
-      color: ${color};
-      border: 1px solid ${color};
-      padding: 10px 16px;
-      border-radius: 8px;
-      font-family: -apple-system, sans-serif;
-      font-size: 14px;
-      z-index: 9999999;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-      max-width: 80vw;
-    `;
+    toast.style.color = color;
+    toast.style.border = `1px solid ${color}`;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 4000);
   };
@@ -139,9 +287,17 @@
     let currentRound = savedState?.currentRound ?? null;
     let guessesSeenTotal = savedState?.guessesSeenTotal ?? 0;
     let gameState = savedState?.gameState ?? null;
+    // Round pour lequel l'event roundEnd basé sur rounds[].state === "Ended"
+    // a déjà été émis (live challenge) — évite de le réémettre à chaque
+    // requête suivante tant que ce round reste marqué "Ended".
+    let roundEndEmittedRound = savedState?.roundEndEmittedRound ?? null;
+    // Dernier objet game contenant un vrai guess (live challenge : la
+    // réponse qui signale la vraie fin de round, ex. l'appel "end-round",
+    // n'a pas les données du guess — on les récupère depuis ce snapshot).
+    let lastGoodGameSnapshot = null;
 
     function persistState() {
-      GM_setValue(STATE_KEY, { currentGameId, currentRound, guessesSeenTotal, gameState });
+      GM_setValue(STATE_KEY, { currentGameId, currentRound, guessesSeenTotal, gameState, roundEndEmittedRound });
     }
 
     // Récupère un identifiant de partie quel que soit le nom du champ utilisé
@@ -179,11 +335,38 @@
         GeoCompanion.emit('roundStart', game);
       }
 
-      // 2) Détection "fin de round" : un nouveau guess vient d'être soumis pour
-      //    le round courant. C'est indépendant du passage au round suivant.
-      //    Selon le mode, les guesses peuvent être sous player.guesses ou directement guesses.
+      // 2) Détection "fin de round" :
+      //    - Live challenge : chaque round a un champ state ("Ongoing"/"Ended")
+      //      dans game.rounds[] — c'est le vrai signal de fin de round (ex.
+      //      l'appel dédié "end-round"), indépendant du moment où CE joueur a
+      //      soumis son guess (les autres joueurs peuvent encore être en train
+      //      de deviner). Cette réponse ne contient toutefois pas les guesses
+      //      (guesses: null) — on complète avec le dernier snapshot qui en avait.
+      //    - Autres modes : ce champ n'existe pas, on retombe sur l'heuristique
+      //      historique "le nombre de guesses a augmenté".
       const guesses = game.player?.guesses || game.guesses;
-      if (Array.isArray(guesses) && guesses.length > guessesSeenTotal) {
+      const roundsInfo = game.rounds || [];
+      const currentRoundInfo = typeof round === 'number' ? roundsInfo[round - 1] : null;
+      // Le champ state existe uniquement en live challenge — sa seule présence
+      // (peu importe sa valeur "Ongoing"/"Ended") indique qu'il faut se fier à
+      // lui, et surtout ne PAS utiliser l'heuristique guesses en parallèle
+      // (sinon double émission : une fois au guess, une fois à "Ended").
+      const hasStateField = currentRoundInfo?.state != null;
+      const roundStateEnded = hasStateField && /ended/i.test(currentRoundInfo.state);
+      const hasRealGuesses = Array.isArray(guesses) && guesses.length > 0;
+
+      if (hasRealGuesses) {
+        lastGoodGameSnapshot = game;
+      }
+
+      if (hasStateField) {
+        if (roundStateEnded && roundEndEmittedRound !== round) {
+          roundEndEmittedRound = round;
+          if (hasRealGuesses) guessesSeenTotal = guesses.length;
+          persistState();
+          GeoCompanion.emit('roundEnd', hasRealGuesses ? game : lastGoodGameSnapshot || game);
+        }
+      } else if (hasRealGuesses && guesses.length > guessesSeenTotal) {
         guessesSeenTotal = guesses.length;
         persistState();
         GeoCompanion.emit('roundEnd', game);
@@ -192,8 +375,8 @@
       // Détection fin de partie (le champ exact peut varier selon le mode : classic, battle royale, live challenge...)
       const roundCount = game.roundCount ?? game.numberOfRounds;
       const finished =
-        game.state === 'finished' ||
-        game.status === 'finished' ||
+        game.state?.toLowerCase() === 'finished' ||
+        game.status?.toLowerCase() === 'finished' ||
         (Array.isArray(guesses) && roundCount != null && guesses.length === roundCount);
 
       if (finished && gameState !== 'finished') {
@@ -208,7 +391,9 @@
         /\/api\/v3\/games\/[^/]+/.test(url) ||
         /\/api\/v3\/(battle-royale|duels)\//.test(url) ||
         /\/api\/v3\/challenges\/[^/]+/.test(url) ||
-        /\/api\/v3\/social\/live-challenge/.test(url)
+        // Live challenge : domaine et format différents du reste de l'API
+        // (game-server.geoguessr.com/api/live-challenge/{token}[/guess|/advance-round|/{round}])
+        /\/api\/live-challenge\//.test(url)
       );
     }
 
@@ -285,53 +470,88 @@
   // ============================================================
   // MODULE: identity
   // ------------------------------------------------------------
-  // Récupère automatiquement le pseudo du joueur connecté à partir
-  // des objets "game" déjà interceptés (pas de saisie manuelle, pas
-  // de vraie authentification). Le nom est mis en cache pour être
-  // disponible même avant qu'une partie ait commencé.
+  // Récupère le pseudo depuis le header de la page (affiché sur
+  // TOUTE page GeoGuessr, indépendamment du mode joué) plutôt que
+  // depuis les objets "game" — ces derniers ne sont disponibles
+  // qu'en partie, et le live challenge ne les fournit pas du tout
+  // dans un format exploitable (ambiguïté entre les 2 joueurs).
+  //
+  // Filet de sécurité : demande manuelle (popup) si le DOM ne
+  // donne jamais rien après quelques secondes.
   //
   // Expose GeoCompanion.getPlayerName() pour les autres modules.
   // ============================================================
   (function identityModule() {
     const STORAGE_KEY = 'geoCompanion_playerName';
     let cachedName = GM_getValue(STORAGE_KEY, null);
-    let warnedOnce = false;
+    let observer = null;
 
-    // Plusieurs noms de champs possibles selon le mode / la version de l'API.
-    // À ajuster si les logs de warning ci-dessous s'affichent en jeu.
-    function extractPlayerName(game) {
-      if (game.player?.nick) return game.player.nick;
-      if (game.player?.username) return game.player.username;
-      if (game.player?.name) return game.player.name;
-      if (Array.isArray(game.players)) {
-        const me = game.players.find((p) => p.isYou || p.isMe);
-        if (me?.nick) return me.nick;
-        if (me?.username) return me.username;
-      }
-      return null;
+    // Sélecteur best-effort basé sur le header actuel de GeoGuessr
+    // (<span class="nick_nick__XXXXX">Pseudo</span>). Le suffixe hashé
+    // après "__" peut changer à un futur déploiement de leur site — d'où
+    // un sélecteur par préfixe de classe plutôt qu'un nom exact, plus
+    // résistant à ce genre de changement mineur.
+    function detectPlayerNameFromDom() {
+      const el = document.querySelector('[class*="nick_nick__"]');
+      const name = el?.textContent?.trim();
+      return name || null;
     }
 
-    function updatePlayerName(game) {
-      const name = extractPlayerName(game);
-
-      if (name && name !== cachedName) {
-        cachedName = name;
-        GM_setValue(STORAGE_KEY, name);
-        console.log('[GeoCompanion] 👤 Joueur identifié :', name);
-      } else if (!name && !warnedOnce) {
-        warnedOnce = true;
-        console.warn(
-          '[GeoCompanion] Impossible de détecter le pseudo joueur dans cet objet game — ' +
-            'vérifie la structure ci-dessous et ajuste extractPlayerName() si besoin :',
-          game
-        );
+    function setPlayerName(name) {
+      if (!name || name === cachedName) return;
+      cachedName = name;
+      GM_setValue(STORAGE_KEY, name);
+      console.log('[GeoCompanion] 👤 Joueur identifié :', name);
+      if (observer) {
+        observer.disconnect(); // plus besoin de surveiller une fois trouvé
+        observer = null;
       }
     }
 
-    // On tente l'extraction à chaque event, pas seulement gameStart,
-    // au cas où le champ n'est pas présent dès la première réponse API.
-    GeoCompanion.on('gameStart', updatePlayerName);
-    GeoCompanion.on('roundStart', updatePlayerName);
+    function tryDetect() {
+      const name = detectPlayerNameFromDom();
+      if (name) setPlayerName(name);
+    }
+
+    function askPlayerNameManually() {
+      if (cachedName) return; // déjà trouvé entre-temps
+      const answer = prompt(
+        "GeoGuessr Companion n'a pas réussi à détecter ton pseudo automatiquement — peux-tu le saisir ?"
+      );
+      if (answer && answer.trim()) {
+        setPlayerName(answer.trim());
+      }
+    }
+
+    // Le script tourne en @run-at document-start : document.body peut ne
+    // pas encore exister à ce stade. On diffère l'init si besoin plutôt
+    // que de planter sur observer.observe(document.body, ...).
+    function initDetection() {
+      // Tentative immédiate (au cas où le header serait déjà chargé), puis
+      // surveillance du DOM : le header peut apparaître après coup
+      // (chargement différé) ou être reconstruit lors d'une navigation SPA.
+      tryDetect();
+      if (!cachedName) {
+        observer = new MutationObserver(() => tryDetect());
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // Si rien après quelques secondes, on demande manuellement plutôt
+        // que de rester bloqué indéfiniment sans pseudo.
+        setTimeout(() => {
+          if (observer) {
+            observer.disconnect();
+            observer = null;
+          }
+          askPlayerNameManually();
+        }, 8000);
+      }
+    }
+
+    if (document.body) {
+      initDetection();
+    } else {
+      document.addEventListener('DOMContentLoaded', initDetection, { once: true });
+    }
 
     GeoCompanion.getPlayerName = function () {
       return cachedName;
@@ -660,11 +880,30 @@
       const guesses = game.player?.guesses || game.guesses || [];
       const guess = guesses[guesses.length - 1] || {};
 
-      const actualLat = roundInfo.lat ?? roundInfo.location?.lat;
-      const actualLng = roundInfo.lng ?? roundInfo.location?.lng;
+      // Live challenge : les coordonnées réelles sont imbriquées dans
+      // answer.coordinateAnswerPayload.coordinate plutôt qu'à plat sur roundInfo.
+      const actualLat =
+        roundInfo.lat ?? roundInfo.location?.lat ?? roundInfo.answer?.coordinateAnswerPayload?.coordinate?.lat;
+      const actualLng =
+        roundInfo.lng ?? roundInfo.location?.lng ?? roundInfo.answer?.coordinateAnswerPayload?.coordinate?.lng;
       const guessLat = guess.lat ?? guess.position?.lat;
       const guessLng = guess.lng ?? guess.position?.lng;
-      const actualCountry = roundInfo.streakLocationCode ?? roundInfo.countryCode ?? null;
+      // Pas de code pays direct en live challenge (juste des coordonnées) —
+      // sera résolu par reverse-geocoding dans le handler roundEnd si besoin.
+      // Live challenge : le pays réel est fourni, mais imbriqué plus profond
+      // (rounds[].question.panoramaQuestionPayload.panorama.countryCode)
+      // plutôt qu'à plat comme en classique.
+      const actualCountry =
+        roundInfo.streakLocationCode ??
+        roundInfo.countryCode ??
+        roundInfo.question?.panoramaQuestionPayload?.panorama?.countryCode ??
+        null;
+
+      // Live challenge : score/distance sont des valeurs directes sur le
+      // guess (guess.score, guess.distance), pas imbriquées comme en classique.
+      const score =
+        guess.roundScoreInPoints ?? guess.score?.amount ?? (typeof guess.score === 'number' ? guess.score : null);
+      const distanceMeters = guess.distanceInMeters ?? (typeof guess.distance === 'number' ? guess.distance : null);
 
       return {
         player_name: GeoCompanion.getPlayerName(),
@@ -676,11 +915,11 @@
         actual_lng: actualLng ?? null,
         guess_lat: guessLat ?? null,
         guess_lng: guessLng ?? null,
-        score: guess.roundScoreInPoints ?? guess.score?.amount ?? null,
-        distance_km: guess.distanceInMeters != null ? guess.distanceInMeters / 1000 : null,
+        score,
+        distance_km: distanceMeters != null ? distanceMeters / 1000 : null,
         country_correct: null, // rempli après coup via reverse-geocoding (voir handler roundEnd)
-        game_mode: game.mode || game.gameMode || null,
-        map_id: game.map || game.mapSlug || null,
+        game_mode: game.mode || game.gameMode || (game.hostId ? 'live-challenge' : null),
+        map_id: game.map || game.mapSlug || game.options?.mapSlug || null,
         map_name: game.mapName || null,
         time_remaining_s:
           guess.time != null && game.timeLimit != null ? game.timeLimit - guess.time : null,
@@ -713,6 +952,17 @@
       }
 
       console.log('[GeoCompanion] 📝 Enregistrement du round :', row);
+
+      // Certains modes (live challenge) ne fournissent pas le code pays réel
+      // directement, seulement des coordonnées — on le déduit alors par
+      // reverse-geocoding, comme on le fait déjà pour le guess plus bas.
+      if (!row.country_code && row.actual_lat != null && row.actual_lng != null) {
+        const actualCountry = await reverseGeocodeCountry(row.actual_lat, row.actual_lng);
+        if (actualCountry) {
+          row.country_code = actualCountry;
+          row.continent = continentFromCountryCode(actualCountry);
+        }
+      }
 
       // Déduction du pays deviné via reverse-geocoding des coordonnées du guess.
       if (row.guess_lat != null && row.guess_lng != null && row.country_code) {
@@ -1099,23 +1349,15 @@
       if (!panel) {
         panel = document.createElement('div');
         panel.id = PANEL_ID;
+        panel.className = 'gc-panel';
         panel.style.cssText = `
-          position: fixed;
           top: 20px;
           right: 20px;
           width: 33vw;
           max-width: 480px;
           max-height: 80vh;
           overflow-y: auto;
-          background: var(--gc-bg-gradient);
-          color: #f0f0f0;
-          border-radius: 12px;
-          padding: 16px;
-          font-family: -apple-system, sans-serif;
           font-size: 20px;
-          z-index: 999999;
-          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-          line-height: 1.5;
         `;
         document.body.appendChild(panel);
       }
@@ -1127,25 +1369,16 @@
       if (!panel) {
         panel = document.createElement('div');
         panel.id = TIPS_PANEL_ID;
+        panel.className = 'gc-panel';
         panel.style.cssText = `
-          position: fixed;
           top: 20px;
           left: 20px;
           width: 480px;
           max-width: 38vw;
           height: auto;
           max-height: 85vh;
-          display: flex;
-          flex-direction: column;
-          background: var(--gc-bg-gradient);
-          color: #f0f0f0;
-          border-radius: 12px;
           padding: 14px;
-          font-family: -apple-system, sans-serif;
           font-size: 19px;
-          z-index: 999999;
-          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-          line-height: 1.4;
         `;
         document.body.appendChild(panel);
 
@@ -1167,11 +1400,11 @@
             ${flagEmojiFromCode(row.country_code)}
           </div>
           <div style="flex:1; min-width:0;">
-            <div style="font-weight:bold; font-size:22px; margin-bottom:8px;">
+            <div class="gc-title" style="margin-bottom:8px;">
               ${row.country_code ? countryNameFromCode(row.country_code) : 'Pays inconnu'}
               ${
                 row.country_code && tldFromCode(row.country_code)
-                  ? `<span style="font-size:22px; font-weight:bold;">(${tldFromCode(row.country_code)})</span>`
+                  ? `<span class="gc-title">(${tldFromCode(row.country_code)})</span>`
                   : ''
               }
             </div>
@@ -1182,18 +1415,15 @@
             }</div>
           </div>
         </div>
-        <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
-        <button id="geo-companion-toggle-stats-btn" style="
-          padding:8px; border-radius:8px; border:none; cursor:pointer;
-          background:var(--gc-bg-secondary-hover); color:white; font-size:14px; width:100%;
-        ">📊 Voir les stats</button>
+        <hr class="gc-hr">
+        <button id="geo-companion-toggle-stats-btn" class="gc-btn gc-btn--secondary gc-btn--block" style="padding:8px; font-size:14px;">📊 Voir les stats</button>
         <div id="geo-companion-stats-section" style="display:none; margin-top:10px;">
           <div id="geo-companion-stats">Chargement des statistiques…</div>
-          <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
+          <hr class="gc-hr">
           <div id="geo-companion-continent-stats"></div>
-          <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
+          <hr class="gc-hr">
           <div id="geo-companion-map-stats"></div>
-          <hr style="opacity:0.15; margin:12px 0; border-color:#888;">
+          <hr class="gc-hr">
           <div id="geo-companion-comparison"></div>
         </div>
       `;
@@ -1217,18 +1447,16 @@
       if (!container) return;
 
       container.innerHTML = `
-        <div style="display:flex; gap:6px; margin-bottom:10px;">
+        <div class="gc-btn-row" style="margin-bottom:10px;">
           ${FILTERS.map(
             (f) => `
-            <button data-filter="${f.key}" style="
-              flex:1; padding:10px 0; border-radius:8px; border:none; cursor:pointer;
-              background:${f.key === activeFilter ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'};
-              color:white; font-size:16px; font-weight:600;
-            ">${f.label}</button>
+            <button data-filter="${f.key}" class="gc-btn gc-btn--flex gc-btn--lg ${
+              f.key === activeFilter ? 'gc-btn--jouer' : 'gc-btn--secondary'
+            }">${f.label}</button>
           `
           ).join('')}
         </div>
-        <div id="geo-companion-stats-body" style="opacity:0.85;">Chargement…</div>
+        <div id="geo-companion-stats-body" class="gc-muted">Chargement…</div>
       `;
 
       container.querySelectorAll('button[data-filter]').forEach((btn) => {
@@ -1265,8 +1493,8 @@
 
       const label = CONTINENT_LABELS[row.continent] || row.continent;
       container.innerHTML = `
-        <div style="font-weight:bold; font-size:17px; margin-bottom:8px;">🌍 ${label}</div>
-        <div style="opacity:0.85;">${aggregateStatsHtml(continentStats)}</div>
+        <div class="gc-subtitle">🌍 ${label}</div>
+        <div class="gc-muted">${aggregateStatsHtml(continentStats)}</div>
       `;
     }
 
@@ -1280,8 +1508,8 @@
 
       const label = row.map_name || row.map_id;
       container.innerHTML = `
-        <div style="font-weight:bold; font-size:17px; margin-bottom:8px;">🗺️ ${escapeHtml(label)}</div>
-        <div style="opacity:0.85;">${aggregateStatsHtml(mapStats)}</div>
+        <div class="gc-subtitle">🗺️ ${escapeHtml(label)}</div>
+        <div class="gc-muted">${aggregateStatsHtml(mapStats)}</div>
       `;
     }
 
@@ -1291,8 +1519,8 @@
 
       if (!comparison || comparison.length === 0) {
         container.innerHTML = `
-          <div style="font-weight:bold; font-size:17px; margin-bottom:8px;">👥 Comparaison</div>
-          <div style="opacity:0.6; font-size:14px;">Aucune donnée pour cette période.</div>
+          <div class="gc-subtitle">👥 Comparaison</div>
+          <div class="gc-muted" style="font-size:14px;">Aucune donnée pour cette période.</div>
         `;
         return;
       }
@@ -1301,8 +1529,8 @@
       const rowsHtml = comparison
         .map(
           (p) => `
-        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px;
-          background:${p.player === me ? 'var(--gc-bg-secondary-hover)' : 'transparent'}; border-radius:6px; margin-bottom:2px;">
+        <div class="gc-card-header" style="padding:6px 8px; border-radius:6px; margin-bottom:2px;
+          background:${p.player === me ? 'var(--gc-bg-secondary-hover)' : 'transparent'};">
           <span style="font-weight:${p.player === me ? '700' : '400'};">${escapeHtml(p.player)}</span>
           <span style="font-size:13px; opacity:0.85;">
             ${p.count} rounds · ${p.avgScore ?? '-'} pts moy. · ${p.successRate != null ? p.successRate + '%' : '-'}
@@ -1313,7 +1541,7 @@
         .join('');
 
       container.innerHTML = `
-        <div style="font-weight:bold; font-size:17px; margin-bottom:8px;">👥 Comparaison</div>
+        <div class="gc-subtitle">👥 Comparaison</div>
         ${rowsHtml}
       `;
     }
@@ -1339,19 +1567,19 @@
 
     function tipHtml(tip) {
       const buttonsHtml = `
-        <button data-edit-tip="${tip.id}" style="background:rgba(0,0,0,0.55); border:none; color:var(--gc-accent); cursor:pointer; font-size:16px; padding:4px 6px; border-radius:5px;" title="Modifier">✏️</button>
-        <button data-delete-tip="${tip.id}" style="background:rgba(0,0,0,0.55); border:none; color:var(--gc-danger); cursor:pointer; font-size:16px; padding:4px 6px; border-radius:5px;" title="Supprimer">🗑️</button>
+        <button data-edit-tip="${tip.id}" class="gc-btn gc-btn--icon-overlay gc-btn--icon-accent" title="Modifier">✏️</button>
+        <button data-delete-tip="${tip.id}" class="gc-btn gc-btn--icon-overlay gc-btn--icon-danger" title="Supprimer">🗑️</button>
       `;
 
       return `
-        <div style="background:var(--gc-bg-secondary); border-radius:8px; padding:6px 8px; font-size:16px;">
+        <div class="gc-card" style="border-radius:8px; font-size:16px;">
           ${tip.content ? `<div style="margin-bottom:4px; white-space:pre-wrap; font-size:18px;">${escapeHtml(tip.content)}</div>` : ''}
           ${
             tip.image_url
               ? `
-                <div style="position:relative; margin-bottom:2px;">
-                  <img data-lightbox="true" src="${tip.image_url}" style="width:100%; max-height:300px; object-fit:contain; border-radius:5px; background:#111; display:block; cursor:zoom-in;">
-                  <div style="position:absolute; top:4px; right:4px; display:flex; gap:4px;">${buttonsHtml}</div>
+                <div class="gc-relative gc-mb-2">
+                  <img data-lightbox="true" src="${tip.image_url}" class="gc-img" style="width:100%; max-height:300px; object-fit:contain;">
+                  <div class="gc-img-overlay-actions">${buttonsHtml}</div>
                 </div>
               `
               : `<div style="display:flex; justify-content:flex-end; gap:8px;">${buttonsHtml}</div>`
@@ -1365,20 +1593,16 @@
       if (!formContainer) return;
 
       formContainer.innerHTML = `
-        <div style="margin-top:6px; background:var(--gc-bg-secondary); border-radius:8px; padding:8px;">
-          <textarea id="geo-companion-tip-text" placeholder="Texte du tip (optionnel)" style="
-            width:100%; min-height:50px; border-radius:6px; border:none; padding:6px; box-sizing:border-box;
-            background:#1a1a28; color:white; font-family:inherit; font-size:13px; resize:vertical;
-          ">${tip ? escapeHtml(tip.content || '') : ''}</textarea>
+        <div class="gc-card" style="margin-top:6px; border-radius:8px;">
+          <textarea id="geo-companion-tip-text" placeholder="Texte du tip (optionnel)" class="gc-input gc-input--compact" style="min-height:50px;">${
+            tip ? escapeHtml(tip.content || '') : ''
+          }</textarea>
           <input id="geo-companion-tip-image" type="text" placeholder="URL d'image (optionnel)" value="${
             tip ? tip.image_url || '' : ''
-          }" style="
-            width:100%; margin-top:5px; border-radius:6px; border:none; padding:6px; box-sizing:border-box;
-            background:#1a1a28; color:white; font-size:13px;
-          ">
-          <div style="display:flex; gap:6px; margin-top:6px;">
-            <button id="geo-companion-tip-save" style="flex:1; padding:6px; border-radius:6px; border:none; cursor:pointer; background:var(--gc-accent-gradient); color:white; font-weight:600; font-size:13px;">Enregistrer</button>
-            <button id="geo-companion-tip-cancel" style="flex:1; padding:6px; border-radius:6px; border:none; cursor:pointer; background:var(--gc-bg-secondary-hover); color:white; font-size:13px;">Annuler</button>
+          }" class="gc-input gc-input--compact">
+          <div class="gc-btn-row" style="margin-top:6px;">
+            <button id="geo-companion-tip-save" class="gc-btn gc-btn--flex gc-btn--primary" style="padding:6px; font-size:13px;">Enregistrer</button>
+            <button id="geo-companion-tip-cancel" class="gc-btn gc-btn--flex gc-btn--secondary" style="padding:6px; font-size:13px;">Annuler</button>
           </div>
         </div>
       `;
@@ -1416,36 +1640,31 @@
       const info = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
 
       tipsPanel.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-shrink:0;">
-          <div style="font-weight:bold; font-size:22px;">
+        <div class="gc-card-header gc-mb-8 gc-shrink-0">
+          <div class="gc-title">
             💡 Tips ${
               plonkitUrl
-                ? `<a href="${plonkitUrl}" target="_blank" rel="noopener noreferrer" style="color:var(--gc-accent); text-decoration:underline; font-size:17px;">🔗 Plonkit</a>`
+                ? `<a href="${plonkitUrl}" target="_blank" rel="noopener noreferrer" class="gc-link" style="font-size:17px;">🔗 Plonkit</a>`
                 : ''
             }
           </div>
-          <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" style="
-            background:none; border:none; color:var(--gc-accent); cursor:pointer; font-size:18px;
-          ">▼</button>
+          <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--icon gc-btn--icon-accent" style="font-size:18px;">▼</button>
         </div>
         <div id="geo-companion-tips-body" style="display:flex; flex-direction:column; min-height:0; flex:1;">
-          <div id="geo-companion-country-fields" style="margin-bottom:6px; flex-shrink:0;"></div>
-          <div id="geo-companion-voiture-route-fields" style="margin-bottom:10px; flex-shrink:0; display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+          <div id="geo-companion-country-fields" class="gc-mb-6 gc-shrink-0"></div>
+          <div id="geo-companion-voiture-route-fields" class="gc-grid-2 gc-mb-10 gc-shrink-0">
             <div id="geo-companion-voiture-field"></div>
             <div id="geo-companion-route-field"></div>
           </div>
           <div id="geo-companion-tips-list" style="flex:1; overflow-y:auto; min-height:0;">
             ${
               tips.length === 0
-                ? `<div style="opacity:0.6; font-size:16px;">Aucun tip pour ce pays pour l'instant.</div>`
-                : `<div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">${tips.map(tipHtml).join('')}</div>`
+                ? `<div class="gc-muted" style="font-size:16px;">Aucun tip pour ce pays pour l'instant.</div>`
+                : `<div class="gc-grid-2">${tips.map(tipHtml).join('')}</div>`
             }
           </div>
-          <button id="geo-companion-add-tip-btn" style="
-            margin-top:6px; padding:7px; border-radius:8px; border:none; cursor:pointer;
-            background:var(--gc-bg-secondary-hover); color:white; font-size:16px; width:100%; flex-shrink:0;
-          ">+ Ajouter un tip</button>
-          <div id="geo-companion-tip-form" style="flex-shrink:0;"></div>
+          <button id="geo-companion-add-tip-btn" class="gc-btn gc-btn--secondary gc-btn--block gc-mt-6 gc-shrink-0" style="padding:7px; font-size:16px;">+ Ajouter un tip</button>
+          <div id="geo-companion-tip-form" class="gc-shrink-0"></div>
         </div>
       `;
 
@@ -1495,10 +1714,10 @@
       const hasContent = info.route_text || info.route_image_url;
 
       container.innerHTML = `
-        <div style="background:var(--gc-bg-secondary); border-radius:6px; padding:7px 9px; font-size:15px; height:100%; box-sizing:border-box;">
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span style="opacity:0.75; font-weight:700; font-size:15px;">Route 🚗 ${drivingSideLabel(info.driving_side)}</span>
-            <button data-edit-route style="background:none; border:none; color:var(--gc-accent); cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
+        <div class="gc-card" style="height:100%; box-sizing:border-box;">
+          <div class="gc-card-header">
+            <span class="gc-label">Route 🚗 ${drivingSideLabel(info.driving_side)}</span>
+            <button data-edit-route class="gc-btn gc-btn--icon gc-btn--icon-accent" title="Modifier">✏️</button>
           </div>
           <div data-route-display style="margin-top:2px;">
             ${
@@ -1507,11 +1726,11 @@
               ${info.route_text ? `<div>${escapeHtml(info.route_text)}</div>` : ''}
               ${
                 info.route_image_url
-                  ? `<img data-lightbox="true" src="${info.route_image_url}" style="max-height:98px; max-width:100%; border-radius:4px; display:block; margin-top:4px; background:#111; cursor:zoom-in;">`
+                  ? `<img data-lightbox="true" src="${info.route_image_url}" class="gc-img" style="max-height:98px; max-width:100%; display:block; margin-top:4px;">`
                   : ''
               }
             `
-                : '<span style="opacity:0.45;">Non renseigné</span>'
+                : '<span class="gc-muted-light">Non renseigné</span>'
             }
           </div>
           <div data-route-form></div>
@@ -1523,27 +1742,21 @@
         formEl.innerHTML = `
           <input type="text" data-route-text value="${escapeHtml(
             info.route_text || ''
-          )}" placeholder="Texte (marquage, bornes...)" style="
-            width:100%; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
-            background:#1a1a28; color:white; font-size:15px;
-          ">
+          )}" placeholder="Texte (marquage, bornes...)" class="gc-input gc-input--compact">
           <input type="text" data-route-image value="${escapeHtml(
             info.route_image_url || ''
-          )}" placeholder="URL de l'image (optionnel)" style="
-            width:100%; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
-            background:#1a1a28; color:white; font-size:15px;
-          ">
-          <div style="display:flex; gap:4px; margin-top:6px;">
-            <button data-route-side="left" style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:${
+          )}" placeholder="URL de l'image (optionnel)" class="gc-input gc-input--compact">
+          <div class="gc-btn-row" style="margin-top:6px;">
+            <button data-route-side="left" class="gc-btn gc-btn--flex" style="padding:4px; font-size:11px; background:${
               info.driving_side === 'left' ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'
-            }; color:white; font-size:11px;">⬅️ Gauche</button>
-            <button data-route-side="right" style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:${
+            };">⬅️ Gauche</button>
+            <button data-route-side="right" class="gc-btn gc-btn--flex" style="padding:4px; font-size:11px; background:${
               info.driving_side === 'right' ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'
-            }; color:white; font-size:11px;">➡️ Droite</button>
+            };">➡️ Droite</button>
           </div>
-          <div style="display:flex; gap:4px; margin-top:6px;">
-            <button data-save-route style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-accent-gradient); color:white; font-size:13px;">OK</button>
-            <button data-cancel-route style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-bg-secondary-hover); color:white; font-size:13px;">Annuler</button>
+          <div class="gc-btn-row" style="margin-top:6px;">
+            <button data-save-route class="gc-btn gc-btn--flex gc-btn--primary" style="padding:4px; font-size:13px;">OK</button>
+            <button data-cancel-route class="gc-btn gc-btn--flex gc-btn--secondary" style="padding:4px; font-size:13px;">Annuler</button>
           </div>
         `;
 
@@ -1590,24 +1803,21 @@
 
     function countryInfoFieldDisplay(fieldConfig, value) {
       if (!value) {
-        return `<span style="opacity:0.45;">Non renseigné</span>`;
+        return `<span class="gc-muted-light">Non renseigné</span>`;
       }
       if (fieldConfig.type === 'image') {
-        return `<img data-lightbox="true" src="${value}" style="max-height:98px; max-width:100%; border-radius:4px; display:block; margin-top:2px; background:#111; cursor:zoom-in;">`;
+        return `<img data-lightbox="true" src="${value}" class="gc-img" style="max-height:98px; max-width:100%; margin-top:2px;">`;
       }
       if (fieldConfig.type === 'images') {
         const urls = value
           .split('\n')
           .map((u) => u.trim())
           .filter(Boolean);
-        if (urls.length === 0) return `<span style="opacity:0.45;">Non renseigné</span>`;
+        if (urls.length === 0) return `<span class="gc-muted-light">Non renseigné</span>`;
         return `
           <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:2px;">
             ${urls
-              .map(
-                (u) =>
-                  `<img data-lightbox="true" src="${u}" style="height:98px; width:auto; max-width:100%; border-radius:4px; background:#111; cursor:zoom-in;">`
-              )
+              .map((u) => `<img data-lightbox="true" src="${u}" class="gc-img" style="height:98px; width:auto; max-width:100%;">`)
               .join('')}
           </div>
         `;
@@ -1622,13 +1832,13 @@
       if (!container) return;
 
       container.innerHTML = `
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+        <div class="gc-grid-2">
           ${COUNTRY_INFO_FIELDS.map(
             (f) => `
-            <div style="${f.fullWidth ? 'grid-column:1 / span 2;' : ''} background:var(--gc-bg-secondary); border-radius:6px; padding:7px 9px; font-size:15px;">
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="opacity:0.75; font-weight:700; font-size:15px;">${f.label}</span>
-                <button data-edit-field="${f.key}" style="background:none; border:none; color:var(--gc-accent); cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
+            <div class="gc-card ${f.fullWidth ? 'gc-span-2' : ''}">
+              <div class="gc-card-header">
+                <span class="gc-label">${f.label}</span>
+                <button data-edit-field="${f.key}" class="gc-btn gc-btn--icon gc-btn--icon-accent" title="Modifier">✏️</button>
               </div>
               <div data-field-display="${f.key}" style="margin-top:2px;">${countryInfoFieldDisplay(
                 f,
@@ -1649,28 +1859,25 @@
           const currentValue = info[key] || '';
           const isMulti = fieldConfig.type === 'images';
 
+          const actionsHtml = `
+            <div class="gc-btn-row" style="margin-top:4px;">
+              <button data-save-field class="gc-btn gc-btn--flex gc-btn--primary" style="padding:4px; font-size:13px;">OK</button>
+              <button data-cancel-field class="gc-btn gc-btn--flex gc-btn--secondary" style="padding:4px; font-size:13px;">Annuler</button>
+            </div>
+          `;
+
           formEl.innerHTML = isMulti
             ? `
-              <textarea placeholder="Une URL d'image par ligne" style="
-                width:100%; min-height:60px; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
-                background:#1a1a28; color:white; font-size:15px; font-family:inherit; resize:vertical;
-              ">${escapeHtml(currentValue)}</textarea>
-              <div style="display:flex; gap:4px; margin-top:4px;">
-                <button data-save-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-accent-gradient); color:white; font-size:13px;">OK</button>
-                <button data-cancel-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-bg-secondary-hover); color:white; font-size:13px;">Annuler</button>
-              </div>
+              <textarea placeholder="Une URL d'image par ligne" class="gc-input gc-input--compact" style="min-height:60px;">${escapeHtml(
+                currentValue
+              )}</textarea>
+              ${actionsHtml}
             `
             : `
               <input type="text" value="${escapeHtml(currentValue)}" placeholder="${
                 fieldConfig.type === 'image' ? "URL de l'image" : 'Texte'
-              }" style="
-                width:100%; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
-                background:#1a1a28; color:white; font-size:15px;
-              ">
-              <div style="display:flex; gap:4px; margin-top:4px;">
-                <button data-save-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-accent-gradient); color:white; font-size:13px;">OK</button>
-                <button data-cancel-field style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-bg-secondary-hover); color:white; font-size:13px;">Annuler</button>
-              </div>
+              }" class="gc-input gc-input--compact">
+              ${actionsHtml}
             `;
 
           const inputEl = formEl.querySelector(isMulti ? 'textarea' : 'input');
@@ -1711,10 +1918,10 @@
           : '';
 
       container.innerHTML = `
-        <div style="background:var(--gc-bg-secondary); border-radius:6px; padding:7px 9px; font-size:15px;">
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span style="opacity:0.75; font-weight:700; font-size:15px;">Voiture</span>
-            <button data-edit-voiture style="background:none; border:none; color:var(--gc-accent); cursor:pointer; font-size:15px;" title="Modifier">✏️</button>
+        <div class="gc-card">
+          <div class="gc-card-header">
+            <span class="gc-label">Voiture</span>
+            <button data-edit-voiture class="gc-btn gc-btn--icon gc-btn--icon-accent" title="Modifier">✏️</button>
           </div>
           <div data-voiture-display style="margin-top:2px;">
             ${
@@ -1723,12 +1930,12 @@
               ${info.voiture_text ? `<div>${escapeHtml(info.voiture_text)}</div>` : ''}
               ${
                 info.voiture_image_url
-                  ? `<img data-lightbox="true" src="${info.voiture_image_url}" style="max-height:98px; max-width:100%; border-radius:4px; display:block; margin-top:4px; background:#111; cursor:zoom-in;">`
+                  ? `<img data-lightbox="true" src="${info.voiture_image_url}" class="gc-img" style="max-height:98px; max-width:100%; margin-top:4px;">`
                   : ''
               }
               ${exclusiveBadge ? `<div style="margin-top:4px; font-size:13px;">${exclusiveBadge}</div>` : ''}
             `
-                : '<span style="opacity:0.45;">Non renseigné</span>'
+                : '<span class="gc-muted-light">Non renseigné</span>'
             }
           </div>
           <div data-voiture-form></div>
@@ -1740,23 +1947,17 @@
         formEl.innerHTML = `
           <input type="text" data-voiture-text value="${escapeHtml(
             info.voiture_text || ''
-          )}" placeholder="Texte (marque, modèle...)" style="
-            width:100%; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
-            background:#1a1a28; color:white; font-size:15px;
-          ">
+          )}" placeholder="Texte (marque, modèle...)" class="gc-input gc-input--compact">
           <input type="text" data-voiture-image value="${escapeHtml(
             info.voiture_image_url || ''
-          )}" placeholder="URL de l'image (optionnel)" style="
-            width:100%; margin-top:4px; border-radius:4px; border:none; padding:4px; box-sizing:border-box;
-            background:#1a1a28; color:white; font-size:15px;
-          ">
+          )}" placeholder="URL de l'image (optionnel)" class="gc-input gc-input--compact">
           <label style="display:flex; align-items:center; gap:6px; margin-top:6px; font-size:13px; cursor:pointer;">
             <input type="checkbox" data-voiture-exclusive ${info.voiture_exclusive ? 'checked' : ''}>
             Exclusif au pays
           </label>
-          <div style="display:flex; gap:4px; margin-top:6px;">
-            <button data-save-voiture style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-accent-gradient); color:white; font-size:13px;">OK</button>
-            <button data-cancel-voiture style="flex:1; padding:4px; border-radius:4px; border:none; cursor:pointer; background:var(--gc-bg-secondary-hover); color:white; font-size:13px;">Annuler</button>
+          <div class="gc-btn-row" style="margin-top:6px;">
+            <button data-save-voiture class="gc-btn gc-btn--flex gc-btn--primary" style="padding:4px; font-size:13px;">OK</button>
+            <button data-cancel-voiture class="gc-btn gc-btn--flex gc-btn--secondary" style="padding:4px; font-size:13px;">Annuler</button>
           </div>
         `;
 
@@ -1857,24 +2058,15 @@
       if (!panel) {
         panel = document.createElement('div');
         panel.id = DASHBOARD_ID;
+        panel.className = 'gc-panel gc-panel--outlined';
         panel.style.cssText = `
-          position: fixed;
           top: 70px;
-          right: 300px;
-          width: 540px;
+          right: 304px;
+          width: 536px;
           max-width: 45vw;
-          max-height: 63.5vh;
-          display: flex;
-          flex-direction: column;
-          background: var(--gc-bg-gradient);
-          color: #f0f0f0;
-          border-radius: 12px;
+          max-height: 61vh;
           padding: 12px;
-          font-family: -apple-system, sans-serif;
           font-size: 14px;
-          z-index: 999999;
-          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-          line-height: 1.4;
         `;
         document.body.appendChild(panel);
       }
@@ -1882,11 +2074,22 @@
     }
 
     // Couleur pleine (bordure) et lavée (fond) selon le taux de réussite :
-    // rouge (0%) -> vert (100%).
+    // interpolation entre leur vrai rouge et leur vrai vert (design system
+    // GeoGuessr), plutôt qu'un dégradé HSL générique.
+    function hexToRgb(hex) {
+      const n = parseInt(hex.replace('#', ''), 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    }
+
     function successColor(rate) {
-      if (rate == null) return { solid: 'hsl(0, 0%, 45%)', wash: 'hsla(0, 0%, 45%, 0.15)' };
-      const hue = Math.round((rate / 100) * 120);
-      return { solid: `hsl(${hue}, 65%, 45%)`, wash: `hsla(${hue}, 65%, 45%, 0.18)` };
+      if (rate == null) return { solid: 'rgba(255, 255, 255, 0.4)', wash: 'rgba(255, 255, 255, 0.1)' };
+      const from = hexToRgb('#e94555'); // --ds-color-red-50
+      const to = hexToRgb('#97e851'); // --ds-color-green-50
+      const t = Math.max(0, Math.min(1, rate / 100));
+      const r = Math.round(from.r + (to.r - from.r) * t);
+      const g = Math.round(from.g + (to.g - from.g) * t);
+      const b = Math.round(from.b + (to.b - from.b) * t);
+      return { solid: `rgb(${r}, ${g}, ${b})`, wash: `rgba(${r}, ${g}, ${b}, 0.18)` };
     }
 
     // Construit et affiche la liste des pays à partir de stats déjà chargées
@@ -1920,19 +2123,19 @@
         });
 
       if (countries.length === 0) {
-        listEl.innerHTML = `<div style="opacity:0.6; font-size:14px;">Aucun pays connu sur ce continent.</div>`;
+        listEl.innerHTML = `<div class="gc-muted" style="font-size:14px;">Aucun pays connu sur ce continent.</div>`;
         return;
       }
 
       listEl.innerHTML = `
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px;">
+        <div class="gc-grid-2 gc-grid-2--compact">
           ${countries
             .map((c) => {
               const color = successColor(c.successRate);
               return `
               <div style="
                 display:flex; justify-content:space-between; align-items:center; gap:6px;
-                padding:3px 10px; border-radius:6px; overflow:hidden;
+                padding:2px 10px; border-radius:10px; overflow:hidden;
                 background:${color.wash}; border-left:4px solid ${color.solid};
               ">
                 <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${flagEmojiFromCode(
@@ -1962,7 +2165,7 @@
         return;
       }
       const listEl = document.getElementById('geo-companion-dashboard-list');
-      if (listEl) listEl.innerHTML = `<div style="opacity:0.6; font-size:13px;">Chargement…</div>`;
+      if (listEl) listEl.innerHTML = `<div class="gc-muted" style="font-size:13px;">Chargement…</div>`;
 
       const allStats = await GeoCompanion.stats.getAllCountryStats(playerName, dashboardActiveFilter);
       dashboardStatsCache.set(dashboardActiveFilter, allStats);
@@ -1979,10 +2182,7 @@
       listEl.innerHTML = `
         <div style="text-align:center; padding:24px 0; opacity:0.75;">
           <div style="margin-bottom:10px; font-size:13px;">Aucune donnée chargée pour cette période.</div>
-          <button id="geo-companion-dashboard-refresh-btn" style="
-            padding:8px 16px; border-radius:8px; border:none; cursor:pointer;
-            background:var(--gc-accent-gradient); color:white; font-size:13px; font-weight:600;
-          ">🔄 Actualiser</button>
+          <button id="geo-companion-dashboard-refresh-btn" class="gc-btn gc-btn--jouer gc-btn--pill" style="padding:8px 16px;">🔄 Actualiser</button>
         </div>
       `;
 
@@ -1999,32 +2199,26 @@
       const playerName = GeoCompanion.getPlayerName();
 
       panel.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-shrink:0;">
-          <div style="font-weight:bold; font-size:16px;">📊 Mes stats</div>
-          <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" style="
-            background:var(--gc-danger-bg); border:none; color:var(--gc-danger); cursor:pointer;
-            font-size:13px; padding:4px 8px; border-radius:6px;
-          ">🗑️</button>
+        <div class="gc-card-header gc-mb-6 gc-shrink-0">
+          <div style="font-weight:bold; font-size:16px;">Mes stats</div>
+          <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--danger gc-btn--pill">🗑️</button>
         </div>
-        <div style="display:flex; gap:4px; margin-bottom:8px; flex-shrink:0;">
+        <hr class="gc-hr gc-hr--dashed" style="margin:0 0 10px;">
+        <div class="gc-btn-row gc-mb-8 gc-shrink-0">
           ${FILTERS.map(
             (f) => `
-            <button data-dash-filter="${f.key}" style="
-              flex:1; padding:4px 0; border-radius:6px; border:none; cursor:pointer;
-              background:${f.key === dashboardActiveFilter ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'};
-              color:white; font-size:11px; font-weight:600;
-            ">${f.label}</button>
+            <button data-dash-filter="${f.key}" class="gc-btn gc-btn--flex gc-btn--pill gc-btn--xs ${
+              f.key === dashboardActiveFilter ? 'gc-btn--jouer' : 'gc-btn--secondary'
+            }">${f.label}</button>
           `
           ).join('')}
         </div>
-        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:10px; flex-shrink:0;">
+        <div class="gc-flex-wrap gc-mb-10 gc-shrink-0" style="gap:4px;">
           ${CONTINENT_ORDER.map(
             (c) => `
-            <button data-dash-continent="${c}" style="
-              padding:6px 10px; border-radius:6px; border:none; cursor:pointer;
-              background:${c === dashboardActiveContinent ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'};
-              color:white; font-size:12px;
-            ">${CONTINENT_LABELS[c]}</button>
+            <button data-dash-continent="${c}" class="gc-btn gc-btn--pill gc-btn--xs ${
+              c === dashboardActiveContinent ? 'gc-btn--jouer' : 'gc-btn--secondary'
+            }">${CONTINENT_LABELS[c]}</button>
           `
           ).join('')}
         </div>

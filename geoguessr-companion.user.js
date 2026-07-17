@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.65
+// @version      1.66
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -1183,6 +1183,14 @@
         }
       }
 
+      // Priorité actuelle : trouver le pays et afficher tips/stats (stats
+      // vierges si rien en base) sans dépendre de la suite (reverse-geocoding
+      // du guess pour le ✅/❌, enregistrement Supabase) — ces deux étapes
+      // font un appel réseau externe chacune et peuvent échouer ou traîner
+      // sans que ça doive empêcher l'affichage. On émet donc roundRecorded
+      // dès que le pays est connu, ici, plutôt qu'à la toute fin.
+      GeoCompanion.emit('roundRecorded', row);
+
       // Déduction du pays deviné via reverse-geocoding des coordonnées du guess.
       if (row.guess_lat != null && row.guess_lng != null && row.country_code) {
         const guessedCountry = await reverseGeocodeCountry(row.guess_lat, row.guess_lng);
@@ -1193,12 +1201,13 @@
               row.country_correct ? 'correct ✅' : 'incorrect ❌'
             }`
           );
+          // Le panneau est déjà affiché (roundRecorded émis plus haut, avant
+          // de connaître ce résultat) — on met juste à jour cette ligne
+          // précise plutôt que de réafficher tout le panneau.
+          GeoCompanion.emit('roundCorrectnessResolved', row);
         }
       }
 
-      // Notifie les autres modules (UI, stats...) avec la donnée finale du round,
-      // pour éviter qu'ils ne redupliquent la logique d'extraction ci-dessus.
-      GeoCompanion.emit('roundRecorded', row);
 
       if (row.player_name) {
         await supabaseClient.insert('profiles', { player_name: row.player_name }, { ignoreDuplicates: true });
@@ -1626,7 +1635,7 @@
             </div>
             <div>Score : ${row.score ?? '-'} pts</div>
             <div>Distance : ${row.distance_km != null ? row.distance_km.toFixed(1) + ' km' : '-'}</div>
-            <div>Résultat : ${
+            <div id="geo-companion-result-line">Résultat : ${
               row.country_correct == null ? '…' : row.country_correct ? '✅ Pays trouvé' : '❌ Pays raté'
             }</div>
           </div>
@@ -2284,6 +2293,16 @@
         // bien enregistré en base mais aucun panneau affiché).
         console.error('[GeoCompanion] Erreur lors de l\'affichage du résultat du round :', e, row);
       }
+    });
+
+    // Le pays deviné (✅/❌) est résolu après coup, une fois le panneau déjà
+    // affiché (voir roundHistoryModule) — on patch juste cette ligne plutôt
+    // que de tout réafficher.
+    GeoCompanion.on('roundCorrectnessResolved', (row) => {
+      const line = document.getElementById('geo-companion-result-line');
+      if (!line) return; // panneau plus affiché (round suivant déjà démarré) : rien à mettre à jour
+      line.textContent = `Résultat : ${row.country_correct ? '✅ Pays trouvé' : '❌ Pays raté'}`;
+      GM_setValue(LAST_DISPLAY_KEY, { row, visible: true });
     });
 
     // Retire les panneaux résultat/tips et oublie l'affichage persisté.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.60
+// @version      1.64
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -521,17 +521,25 @@
     };
 
     // --- Hook WebSocket (live challenge uniquement) ---
-    // En live challenge, GeoGuessr pousse les vrais events de fin de round/
-    // partie via WebSocket ("LiveChallengeRoundEnded", "LiveChallengeFinished"),
-    // pas seulement via des réponses HTTP. Un joueur qui a déjà guessé et ne
-    // fait plus aucune requête HTTP ensuite ne verrait jamais la transition
-    // "Ended" avec le seul hook fetch/XHR — d'où ce hook supplémentaire, EN
-    // PLUS du hasStateField HTTP (retour arrière du WS-only : le mix des
-    // deux marchait mieux en pratique que WS seul).
-    // Ces messages WS ne contiennent pas les données du round (juste un code
-    // + gameId), donc on les utilise comme simple déclencheur fiable, et on
-    // reconstruit l'event à partir du dernier snapshot HTTP connu (déjà
-    // utilisé comme filet de sécurité pour le cas classique aussi).
+    // En live challenge, GeoGuessr pousse les vrais events de round/partie
+    // via WebSocket, indépendamment des réponses HTTP — nécessaire car un
+    // joueur qui a déjà guessé et ne fait plus aucune requête HTTP ensuite
+    // ne verrait jamais la transition avec le seul hook fetch/XHR.
+    // Confirmé par capture réseau réelle : contrairement à ce qu'on pensait,
+    // le message "LiveChallengeRoundEnded" ne se limite PAS à un simple
+    // code + gameId — il porte liveChallenge.state, qui est un objet "game"
+    // complet (rounds[] avec question ET answer inclus, currentRoundNumber,
+    // hostId...), envoyé à TOUS les joueurs, pas seulement l'hôte. On
+    // l'utilise donc directement comme source de données plutôt que de
+    // repasser par lastGoodGameSnapshot (HTTP), qui s'est révélé incomplet
+    // côté non-hôte (answer.coordinateAnswerPayload absent de leurs propres
+    // réponses HTTP — cause du bug "country_code/actual_lat toujours null
+    // sauf pour l'hôte").
+    // Modèle de fonctionnement (demande explicite) :
+    //   - RoundStarting  -> masque les panneaux du round précédent
+    //   - RoundEnded     -> récupère les données (depuis le message WS
+    //                       lui-même) + affiche le résultat
+    //   - navigation vers une autre page -> masque (voir checkHomepage)
     const OriginalWebSocket = pageWindow.WebSocket;
     if (typeof OriginalWebSocket === 'function') {
       pageWindow.WebSocket = function (...args) {
@@ -545,33 +553,50 @@
           }
           if (!data || !data.code) return;
 
-          if (data.code === 'LiveChallengeRoundEnded') {
-            // Le round qui vient de se terminer : on se fie au compteur
-            // dédié (liveChallengeRound) plutôt qu'à currentRound, qui peut
-            // ne jamais avoir été mis à jour si aucune requête HTTP avec un
-            // round exploitable n'est arrivée depuis le round précédent.
-            const endedRound = liveChallengeRound ?? currentRound ?? 1;
-            if (roundEndEmittedRound !== endedRound && lastGoodGameSnapshot) {
-              roundEndEmittedRound = endedRound;
-              persistState();
-              // On force le round sur le snapshot émis : extractRoundData()
-              // lit game.round, et le snapshot HTTP disponible peut être
-              // légèrement daté par rapport à ce round précis.
-              GeoCompanion.emit('roundEnd', { ...lastGoodGameSnapshot, round: endedRound });
+          if (data.code === 'LiveChallengeRoundStarting') {
+            GeoCompanion.emit('roundStart', data.liveChallenge?.state || lastGoodGameSnapshot || {});
+          } else if (data.code === 'LiveChallengeRoundEnded') {
+            const state = data.liveChallenge?.state;
+            // currentRoundNumber est présent directement sur ce message
+            // (confirmé par capture réseau réelle) — plus fiable que le
+            // compteur liveChallengeRound, qui reste un repli seulement si
+            // ce champ venait à manquer.
+            const endedRound = state?.currentRoundNumber ?? liveChallengeRound ?? currentRound ?? 1;
+            if (roundEndEmittedRound !== endedRound) {
+              // state a toujours guesses:null (confirmé par capture réseau) —
+              // le guess de CE joueur ne s'y trouve pas, seulement dans le
+              // snapshot HTTP (lastGoodGameSnapshot). On fusionne : les
+              // données de round/réponse viennent de state (fiables pour
+              // tout le monde), le guess vient du snapshot HTTP en repli.
+              const game = state
+                ? { ...(lastGoodGameSnapshot || {}), ...state, guesses: state.guesses ?? lastGoodGameSnapshot?.guesses ?? null }
+                : lastGoodGameSnapshot;
+              if (game) {
+                roundEndEmittedRound = endedRound;
+                liveChallengeRound = endedRound;
+                persistState();
+                GeoCompanion.emit('roundEnd', { ...game, round: endedRound });
+              }
             }
-          } else if (data.code === 'LiveChallengeFinished') {
+          } else if (data.code === 'FinishChallengeFinished') {
+            // Le vrai code est "FinishChallengeFinished", pas
+            // "LiveChallengeFinished" (confirmé par capture réseau réelle) —
+            // avec le mauvais nom, cette branche ne se déclenchait jamais.
             if (gameState !== 'finished') {
               gameState = 'finished';
               persistState();
-              GeoCompanion.emit('gameEnd', lastGoodGameSnapshot || {});
+              GeoCompanion.emit('gameEnd', data.liveChallenge?.state || lastGoodGameSnapshot || {});
             }
-          } else if (data.code === 'LiveChallengeRoundStarted') {
-            // Pas de données de round dans ce message — sert de déclencheur
-            // pour nettoyer les panneaux de l'ancien round, et fait avancer
-            // le compteur dédié pour le prochain "Ended".
-            liveChallengeRound = (liveChallengeRound ?? currentRound ?? 1) + 1;
-            persistState();
-            GeoCompanion.emit('roundStart', lastGoodGameSnapshot || {});
+          } else if (data.code === 'LiveChallengeLeaderboardUpdate') {
+            // Repli supplémentaire pour garder liveChallengeRound à jour
+            // entre deux RoundEnded (utile si un message venait à être
+            // manqué) : liveChallenge.leaderboards.roundGuessTime.roundNumber
+            // est une vraie donnée serveur, confirmée par capture réseau.
+            const roundNumber = data.liveChallenge?.leaderboards?.roundGuessTime?.roundNumber;
+            if (typeof roundNumber === 'number' && roundNumber !== liveChallengeRound) {
+              liveChallengeRound = roundNumber;
+              persistState();
+            }
           }
         });
         return ws;
@@ -600,11 +625,14 @@
     });
 
     GeoCompanion.on('roundStart', (game) => {
-      console.log('[GeoCompanion] ▶️ Début de round', game.round ?? game.roundNumber);
+      console.log(
+        '[GeoCompanion] ▶️ Début de round',
+        game.round ?? game.roundNumber ?? game.currentRoundNumber
+      );
     });
 
     GeoCompanion.on('roundEnd', (game) => {
-      console.log('[GeoCompanion] ⏹️ Fin de round', game.round ?? game.roundNumber);
+      console.log('[GeoCompanion] ⏹️ Fin de round', game.round ?? game.roundNumber ?? game.currentRoundNumber);
     });
   })();
 
@@ -1006,7 +1034,6 @@
   // testé en conditions réelles (voir les warnings en console).
   // ============================================================
   (function roundHistoryModule() {
-    let warnedOnce = false;
     let warnedMapOnce = false;
 
     function extractRoundData(game) {
@@ -1055,11 +1082,15 @@
       // Live challenge : le pays réel est fourni, mais imbriqué plus profond
       // (rounds[].question.panoramaQuestionPayload.panorama.countryCode)
       // plutôt qu'à plat comme en classique.
-      const actualCountry =
+      const actualCountryRaw =
         roundInfo.streakLocationCode ??
         roundInfo.countryCode ??
         roundInfo.question?.panoramaQuestionPayload?.panorama?.countryCode ??
         null;
+      // Confirmé par capture réseau réelle : ce champ arrive en minuscule
+      // en live challenge ("gh", "br"...) alors que le reste du script (DB,
+      // affichage, continentFromCountryCode) suppose du majuscule.
+      const actualCountry = actualCountryRaw ? actualCountryRaw.toUpperCase() : null;
 
       // Live challenge : score/distance sont des valeurs directes sur le
       // guess (guess.score, guess.distance), pas imbriquées comme en classique.
@@ -1092,13 +1123,27 @@
       const row = extractRoundData(game);
 
       // Warning si les champs essentiels manquent, pour repérer vite un souci d'extraction.
-      if (!warnedOnce && (row.actual_lat == null || row.guess_lat == null || row.country_code == null)) {
-        warnedOnce = true;
+      // Pas de garde "une seule fois" ici (contrairement à avant) : utile
+      // en ce moment pour comparer round par round pendant le debug live
+      // challenge en cours — à remettre derrière `warnedOnce` une fois le
+      // souci résolu, pour ne pas spammer la console en usage normal.
+      if (row.actual_lat == null || row.guess_lat == null || row.country_code == null) {
         console.warn(
           '[GeoCompanion] Certains champs clés du round sont introuvables — ' +
             'vérifie la structure ci-dessous et ajuste extractRoundData() si besoin :',
           { extracted: row, rawGame: game }
         );
+        // Dump texte (JSON.stringify) en plus de l'objet ci-dessus : un objet
+        // passé tel quel à console.warn reste replié ("(4) […]") tant qu'on
+        // ne le déplie pas à la main dans les devtools avant d'exporter la
+        // console — ce qui donne un export inexploitable. En texte, la
+        // structure complète est capturée telle quelle.
+        try {
+          console.warn('[GeoCompanion] game.rounds en JSON :', JSON.stringify(game.rounds));
+        } catch (e) {
+          // JSON.stringify peut échouer sur une référence circulaire — pas
+          // grave, l'objet ci-dessus reste dépliable manuellement.
+        }
       }
 
       // Warning séparé pour map_id (utile pour les stats par carte) — moins
@@ -2262,7 +2307,7 @@
     // ==========================================================
     const DASHBOARD_ID = 'geo-companion-dashboard';
     const CONTINENT_ORDER = ['europe', 'asia', 'africa', 'north_america', 'south_america', 'oceania'];
-    let dashboardActiveContinent = CONTINENT_ORDER[0];
+    let dashboardActiveContinent = null; // aucun continent sélectionné par défaut = tous les pays
     let dashboardActiveFilter = 'all';
     let dashboardCollapsed = false; // conservé entre les re-rendus (changement de filtre/continent)
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.64
+// @version      1.65
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -394,7 +394,7 @@
         // via des events WebSocket entre-temps.
         liveChallengeRound = round;
         persistState();
-        GeoCompanion.emit('roundStart', game);
+        GeoCompanion.emit('roundStart', { ...game, _source: 'http' });
       }
 
       // 2) Détection "fin de round" :
@@ -443,12 +443,12 @@
           liveChallengeRound = round;
           if (hasRealGuesses) guessesSeenTotal = guesses.length;
           persistState();
-          GeoCompanion.emit('roundEnd', hasRealGuesses ? game : lastGoodGameSnapshot || game);
+          GeoCompanion.emit('roundEnd', { ...(hasRealGuesses ? game : lastGoodGameSnapshot || game), _source: 'http-state' });
         }
       } else if (hasRealGuesses && guesses.length > guessesSeenTotal) {
         guessesSeenTotal = guesses.length;
         persistState();
-        GeoCompanion.emit('roundEnd', game);
+        GeoCompanion.emit('roundEnd', { ...game, _source: 'http-guesses' });
       }
 
       // Détection fin de partie (le champ exact peut varier selon le mode : classic, battle royale, live challenge...)
@@ -554,7 +554,10 @@
           if (!data || !data.code) return;
 
           if (data.code === 'LiveChallengeRoundStarting') {
-            GeoCompanion.emit('roundStart', data.liveChallenge?.state || lastGoodGameSnapshot || {});
+            GeoCompanion.emit('roundStart', {
+              ...(data.liveChallenge?.state || lastGoodGameSnapshot || {}),
+              _source: 'ws-round-starting',
+            });
           } else if (data.code === 'LiveChallengeRoundEnded') {
             const state = data.liveChallenge?.state;
             // currentRoundNumber est présent directement sur ce message
@@ -575,7 +578,11 @@
                 roundEndEmittedRound = endedRound;
                 liveChallengeRound = endedRound;
                 persistState();
-                GeoCompanion.emit('roundEnd', { ...game, round: endedRound });
+                GeoCompanion.emit('roundEnd', {
+                  ...game,
+                  round: endedRound,
+                  _source: state ? 'ws-round-ended' : 'ws-round-ended-http-fallback',
+                });
               }
             }
           } else if (data.code === 'FinishChallengeFinished') {
@@ -627,12 +634,17 @@
     GeoCompanion.on('roundStart', (game) => {
       console.log(
         '[GeoCompanion] ▶️ Début de round',
-        game.round ?? game.roundNumber ?? game.currentRoundNumber
+        game.round ?? game.roundNumber ?? game.currentRoundNumber,
+        `(source: ${game._source || 'inconnue'})`
       );
     });
 
     GeoCompanion.on('roundEnd', (game) => {
-      console.log('[GeoCompanion] ⏹️ Fin de round', game.round ?? game.roundNumber ?? game.currentRoundNumber);
+      console.log(
+        '[GeoCompanion] ⏹️ Fin de round',
+        game.round ?? game.roundNumber ?? game.currentRoundNumber,
+        `(source: ${game._source || 'inconnue'})`
+      );
     });
   })();
 
@@ -2255,9 +2267,23 @@
     });
 
     GeoCompanion.on('roundRecorded', async (row) => {
-      if (!row.country_code) return; // pas de pays détecté, rien d'exploitable à afficher
-      await displayRoundResult(row);
-      GM_setValue(LAST_DISPLAY_KEY, { row, visible: true });
+      if (!row.country_code) {
+        console.log('[GeoCompanion] roundRecorded reçu sans country_code, rien à afficher.', row);
+        return; // pas de pays détecté, rien d'exploitable à afficher
+      }
+      try {
+        await displayRoundResult(row);
+        GM_setValue(LAST_DISPLAY_KEY, { row, visible: true });
+      } catch (e) {
+        // GeoCompanion.emit ne rattrape que les erreurs SYNCHRONES de ses
+        // listeners — un throw dans un listener async (comme celui-ci)
+        // devient un rejet de promesse non intercepté, invisible en pratique
+        // (juste un "Uncaught (in promise)" générique du navigateur). D'où
+        // ce try/catch explicite, pour avoir un log exploitable si
+        // displayRoundResult() échoue silencieusement (cas suspecté : round
+        // bien enregistré en base mais aucun panneau affiché).
+        console.error('[GeoCompanion] Erreur lors de l\'affichage du résultat du round :', e, row);
+      }
     });
 
     // Retire les panneaux résultat/tips et oublie l'affichage persisté.

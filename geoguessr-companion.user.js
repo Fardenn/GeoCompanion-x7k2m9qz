@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.71
+// @version      1.80
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -307,23 +307,15 @@
     let currentRound = savedState?.currentRound ?? null;
     let guessesSeenTotal = savedState?.guessesSeenTotal ?? 0;
     let gameState = savedState?.gameState ?? null;
-    // Round pour lequel l'event roundEnd basé sur rounds[].state === "Ended"
-    // a déjà été émis (live challenge) — évite de le réémettre à chaque
-    // requête suivante tant que ce round reste marqué "Ended".
+    // Round pour lequel l'event roundEnd a déjà été émis (live challenge,
+    // via le WS "LiveChallengeRoundEnded") — évite une double émission.
     let roundEndEmittedRound = savedState?.roundEndEmittedRound ?? null;
-    // Dernier objet game contenant un vrai guess (live challenge : la
-    // réponse qui signale la vraie fin de round, ex. l'appel "end-round",
-    // n'a pas les données du guess — on les récupère depuis ce snapshot).
+    // Dernier objet game live challenge connu (capturé en passif dès qu'une
+    // réponse HTTP a le champ rounds[].state) — utilisé comme base pour des
+    // champs annexes (map_name...) par le hook WS, qui reste la seule
+    // source des données de round/guess elles-mêmes (voir handleGameObject
+    // et le hook WebSocket plus bas).
     let lastGoodGameSnapshot = null;
-    // Round pour lequel lastGoodGameSnapshot contient un vrai guess (par
-    // opposition à juste les données de lieu). Évite qu'une réponse sans
-    // guess pour ce même round (ex: l'hôte d'un live challenge appelle
-    // /advance-round ou /end-round pour faire avancer la partie — lui seul
-    // fait ces appels) n'écrase un snapshot qui contenait déjà SON guess,
-    // ce qui le ferait disparaître du round enregistré à tort (bug repéré :
-    // seul l'hôte perdait son guess, les autres joueurs n'appelant jamais
-    // ces endpoints n'étaient pas concernés).
-    let lastGoodGameSnapshotRoundWithGuess = null;
     // Live challenge uniquement : les events WebSocket de début/fin de round
     // n'incluent pas le numéro de round (juste un code). Sans ce compteur
     // dédié, on dépendait de "currentRound" — qui ne se met à jour que si
@@ -402,82 +394,53 @@
         gameState = null;
         liveChallengeRound = null;
         lastGoodGameSnapshot = null;
-        lastGoodGameSnapshotRoundWithGuess = null;
         wsOwnGuessByRound = {};
         lastEmittedRoundGameByRound = {};
         persistState();
         GeoCompanion.emit('gameStart', game);
       }
 
-      // 1) Détection "début de round" : le numéro de round a augmenté.
-      //    Ça arrive typiquement quand le joueur clique sur "suivant", donc plus tard
-      //    que la soumission du guess.
       const round = deriveRoundNumber(game);
-      if (typeof round === 'number' && round !== currentRound) {
-        currentRound = round;
-        // Recale le compteur dédié live challenge sur cette valeur fiable
-        // (HTTP), pour éviter qu'il ne dérive s'il avait avancé séparément
-        // via des events WebSocket entre-temps.
-        liveChallengeRound = round;
-        persistState();
-        GeoCompanion.emit('roundStart', { ...game, _source: 'http' });
-      }
-
-      // 2) Détection "fin de round" :
-      //    - Live challenge : chaque round a un champ state ("Ongoing"/"Ended")
-      //      dans game.rounds[] — signal fiable, indépendant du moment où CE
-      //      joueur guess (les autres peuvent encore jouer). Sa réponse n'a
-      //      pas les guesses (null) : complété via le dernier snapshot qui en avait.
-      //    - Autres modes : pas de ce champ, on retombe sur l'heuristique
-      //      "le nombre de guesses a augmenté".
-      const guesses = game.player?.guesses || game.guesses;
       const roundsInfo = game.rounds || [];
       const currentRoundInfo = typeof round === 'number' ? roundsInfo[round - 1] : null;
-      // Le champ state existe uniquement en live challenge — sa seule présence
-      // (peu importe sa valeur "Ongoing"/"Ended") indique qu'il faut se fier à
-      // lui, et surtout ne PAS utiliser l'heuristique guesses en parallèle
-      // (sinon double émission : une fois au guess, une fois à "Ended").
-      const hasStateField = currentRoundInfo?.state != null;
-      const roundStateEnded = hasStateField && /ended/i.test(currentRoundInfo.state);
-      const hasRealGuesses = Array.isArray(guesses) && guesses.length > 0;
-      // Une réponse peut révéler les données du lieu réel (pays/coordonnées)
-      // du round en cours même si CE joueur n'a lui-même rien guessé (round
-      // terminé sans qu'il ait répondu à temps) — on capture aussi ce cas.
-      const currentRoundHasLocationData =
-        currentRoundInfo &&
-        (currentRoundInfo.countryCode != null ||
-          currentRoundInfo.streakLocationCode != null ||
-          currentRoundInfo.question?.panoramaQuestionPayload?.panorama?.countryCode != null ||
-          currentRoundInfo.lat != null ||
-          currentRoundInfo.location?.lat != null);
+      // Le champ state existe uniquement en live challenge — sa présence
+      // indique qu'on ne doit RIEN déclencher depuis HTTP pour cette réponse
+      // (round-start/round-end/fin de partie) : la détection live challenge
+      // passe désormais uniquement par le WebSocket (voir le hook WS plus
+      // bas — roundStart/roundEnd/gameEnd y sont fiables et complets, HTTP
+      // s'est révélé à la fois redondant et moins fiable pour ce mode).
+      // HTTP continue juste à alimenter lastGoodGameSnapshot en passif, en
+      // repli pour des champs annexes (map_name...) si jamais absents de
+      // liveChallenge.state.
+      const isLiveChallengeResponse = currentRoundInfo?.state != null;
 
-      if (hasRealGuesses) {
-        // Toujours prioritaire : données de guess fraîches pour ce round.
-        lastGoodGameSnapshot = game;
-        lastGoodGameSnapshotRoundWithGuess = round;
-      } else if (currentRoundHasLocationData && lastGoodGameSnapshotRoundWithGuess !== round) {
-        // On ne capture les données de lieu seules que si on n'a pas déjà
-        // un snapshot avec un vrai guess pour CE round — sinon un appel
-        // sans guess (ex: l'hôte qui fait avancer la partie) écraserait le
-        // snapshot qui contenait son propre guess.
+      if (isLiveChallengeResponse) {
         lastGoodGameSnapshot = game;
       }
 
-      if (hasStateField) {
-        if (roundStateEnded && roundEndEmittedRound !== round) {
-          roundEndEmittedRound = round;
-          liveChallengeRound = round;
-          if (hasRealGuesses) guessesSeenTotal = guesses.length;
-          persistState();
-          GeoCompanion.emit('roundEnd', { ...(hasRealGuesses ? game : lastGoodGameSnapshot || game), _source: 'http-state' });
+      // 1) Détection "début de round" : le numéro de round a augmenté. Pas
+      //    en live challenge (géré par le WS "LiveChallengeRoundStarting").
+      if (typeof round === 'number' && round !== currentRound) {
+        currentRound = round;
+        persistState();
+        if (!isLiveChallengeResponse) {
+          GeoCompanion.emit('roundStart', { ...game, _source: 'http' });
         }
-      } else if (hasRealGuesses && guesses.length > guessesSeenTotal) {
+      }
+
+      // Le reste (fin de round, fin de partie) ne concerne que les modes
+      // autres que live challenge — heuristique "le nombre de guesses a
+      // augmenté", inchangée pour classique/challenge/battle royale/duels.
+      if (isLiveChallengeResponse) return;
+
+      const guesses = game.player?.guesses || game.guesses;
+      if (Array.isArray(guesses) && guesses.length > guessesSeenTotal) {
         guessesSeenTotal = guesses.length;
         persistState();
         GeoCompanion.emit('roundEnd', { ...game, _source: 'http-guesses' });
       }
 
-      // Détection fin de partie (le champ exact peut varier selon le mode : classic, battle royale, live challenge...)
+      // Détection fin de partie (le champ exact peut varier selon le mode : classic, battle royale...)
       const roundCount = game.roundCount ?? game.numberOfRounds;
       const finished =
         game.state?.toLowerCase() === 'finished' ||
@@ -603,9 +566,9 @@
               if (game) {
                 // Le guess capturé via LeaderboardUpdate (wsOwnGuessByRound)
                 // est fiable pour tout le monde, host ou non — on l'utilise
-                // en priorité pour lat/lng/distance, tout en gardant les
-                // éventuels autres champs (score...) du guess HTTP existant
-                // s'il y en avait un.
+                // en priorité pour lat/lng/distance/score, tout en gardant
+                // les éventuels autres champs du guess HTTP existant s'il y
+                // en avait un.
                 const wsGuess = wsOwnGuessByRound[endedRound];
                 const finalGame = wsGuess
                   ? {
@@ -616,6 +579,7 @@
                           lat: wsGuess.lat,
                           lng: wsGuess.lng,
                           distanceInMeters: wsGuess.distanceMeters,
+                          ...(wsGuess.score != null ? { roundScoreInPoints: wsGuess.score } : {}),
                         },
                       ],
                     }
@@ -668,22 +632,47 @@
               if (myName) {
                 const myIndex = roundLeaderboard.entries.findIndex((e) => e && e.name === myName);
                 const myGuess = myIndex !== -1 ? roundLeaderboard.guesses[myIndex] : null;
+                const myEntry = myIndex !== -1 ? roundLeaderboard.entries[myIndex] : null;
                 if (myGuess) {
                   const roundNum = roundLeaderboard.roundNumber;
                   const hadGuessBefore = wsOwnGuessByRound[roundNum] != null;
+                  // Score absent du guess pour certains joueurs même via HTTP
+                  // (même souci racine que country_code/actual_lat avant) —
+                  // on tente plusieurs noms de champ plausibles, sur le guess
+                  // ET sur l'entry (le score y est peut-être plutôt qu'ici).
+                  // Log de la structure brute en plus, tant qu'on n'a pas
+                  // confirmé le bon champ par capture réseau réelle.
+                  const myScore =
+                    myGuess.score ??
+                    myGuess.roundScoreInPoints ??
+                    myGuess.points ??
+                    myEntry?.score ??
+                    myEntry?.roundScore ??
+                    myEntry?.totalScore ??
+                    null;
+                  if (myScore == null) {
+                    console.log(
+                      '[GeoCompanion] 🔎 Score introuvable dans le guess WS, structure brute (aide au debug) — guess:',
+                      JSON.stringify(myGuess),
+                      '| entry:',
+                      JSON.stringify(myEntry)
+                    );
+                  }
                   wsOwnGuessByRound[roundNum] = {
                     lat: myGuess.lat,
                     lng: myGuess.lng,
                     distanceMeters: myGuess.distance,
+                    score: myScore,
                   };
 
                   // Cas particulier : ce guess arrive APRÈS le roundEnd déjà
                   // traité pour ce round (joueur qui n'a pas cliqué à temps,
                   // le LeaderboardUpdate avec son guess arrive en retard).
                   // On rafraîchit l'affichage déjà rendu plutôt que de le
-                  // laisser sans guess indéfiniment — sans repasser par
-                  // Supabase (voir _isLateGuessUpdate dans roundHistoryModule),
-                  // pour ne pas créer de doublon en base.
+                  // laisser sans guess indéfiniment. roundHistoryModule gère
+                  // lui-même l'enregistrement Supabase (uniquement si le
+                  // score est désormais connu, avec garde anti-doublon) —
+                  // pas de logique de dédoublonnage à faire ici.
                   if (!hadGuessBefore && roundEndEmittedRound === roundNum && lastEmittedRoundGameByRound[roundNum]) {
                     const previousGame = lastEmittedRoundGameByRound[roundNum];
                     const updatedGame = {
@@ -694,6 +683,7 @@
                           lat: myGuess.lat,
                           lng: myGuess.lng,
                           distanceInMeters: myGuess.distance,
+                          ...(myScore != null ? { roundScoreInPoints: myScore } : {}),
                         },
                       ],
                     };
@@ -702,7 +692,6 @@
                       ...updatedGame,
                       round: roundNum,
                       _source: 'ws-late-guess-update',
-                      _isLateGuessUpdate: true,
                     });
                   }
                 }
@@ -1151,6 +1140,11 @@
   // ============================================================
   (function roundHistoryModule() {
     let warnedMapOnce = false;
+    // Clés (game_token:round_number) déjà enregistrées dans Supabase cette
+    // session — évite un doublon quand un round est réémis avec le score
+    // qu'on n'avait pas encore (late-guess-update, voir apiDetectionModule).
+    const recordedRoundKeys = new Set();
+    GeoCompanion.on('gameStart', () => recordedRoundKeys.clear());
 
     function extractRoundData(game) {
       // Repli identique à apiDetectionModule::deriveRoundNumber (module
@@ -1238,30 +1232,6 @@
     GeoCompanion.on('roundEnd', async (game) => {
       const row = extractRoundData(game);
 
-      // Warning si les champs essentiels manquent, pour repérer vite un souci d'extraction.
-      // Pas de garde "une seule fois" ici (contrairement à avant) : utile
-      // en ce moment pour comparer round par round pendant le debug live
-      // challenge en cours — à remettre derrière `warnedOnce` une fois le
-      // souci résolu, pour ne pas spammer la console en usage normal.
-      if (row.actual_lat == null || row.guess_lat == null || row.country_code == null) {
-        console.warn(
-          '[GeoCompanion] Certains champs clés du round sont introuvables — ' +
-            'vérifie la structure ci-dessous et ajuste extractRoundData() si besoin :',
-          { extracted: row, rawGame: game }
-        );
-        // Dump texte (JSON.stringify) en plus de l'objet ci-dessus : un objet
-        // passé tel quel à console.warn reste replié ("(4) […]") tant qu'on
-        // ne le déplie pas à la main dans les devtools avant d'exporter la
-        // console — ce qui donne un export inexploitable. En texte, la
-        // structure complète est capturée telle quelle.
-        try {
-          console.warn('[GeoCompanion] game.rounds en JSON :', JSON.stringify(game.rounds));
-        } catch (e) {
-          // JSON.stringify peut échouer sur une référence circulaire — pas
-          // grave, l'objet ci-dessus reste dépliable manuellement.
-        }
-      }
-
       // Warning séparé pour map_id (utile pour les stats par carte) — moins
       // critique que les champs ci-dessus donc géré à part.
       if (!warnedMapOnce && row.map_id == null) {
@@ -1317,19 +1287,25 @@
         await supabaseClient.insert('profiles', { player_name: row.player_name }, { ignoreDuplicates: true });
       }
 
-      // _isLateGuessUpdate (voir apiDetectionModule) : ce round a déjà été
-      // enregistré une première fois — ceci n'est qu'un rafraîchissement de
-      // l'affichage suite à un guess arrivé en retard (joueur qui n'a pas
-      // cliqué à temps). On ne réinsère pas dans Supabase, ça créerait un
-      // doublon (pas de contrainte d'unicité sur game_token+round_number).
-      if (game._isLateGuessUpdate) {
-        console.log('[GeoCompanion] 🔄 Affichage rafraîchi suite à un guess arrivé en retard (round déjà enregistré, pas de ré-insertion).');
-        return;
-      }
-
-      const ok = await supabaseClient.insert('rounds', row);
-      if (ok) {
-        console.log('[GeoCompanion] ✅ Round enregistré dans Supabase');
+      // On n'enregistre dans Supabase QUE lorsque le score est connu : soit
+      // directement ici si le joueur avait déjà guessé au moment du
+      // roundEnd, soit plus tard via le rafraîchissement _source:'ws-late-
+      // guess-update' (apiDetectionModule) une fois le guess/score arrivé en
+      // retard. Garde anti-doublon (recordedRoundKeys) : ce handler peut être
+      // rappelé plusieurs fois pour le même round (roundCorrectnessResolved
+      // n'en fait pas partie, mais une late-guess-update oui) et il n'y a pas de
+      // contrainte d'unicité game_token+round_number en base.
+      const recordKey = `${row.game_token}:${row.round_number}`;
+      if (row.score == null) {
+        console.log('[GeoCompanion] ⏳ Score pas encore connu pour ce round — enregistrement différé.');
+      } else if (recordedRoundKeys.has(recordKey)) {
+        console.log('[GeoCompanion] Round déjà enregistré, pas de ré-insertion.');
+      } else {
+        recordedRoundKeys.add(recordKey);
+        const ok = await supabaseClient.insert('rounds', row);
+        if (ok) {
+          console.log('[GeoCompanion] ✅ Round enregistré dans Supabase');
+        }
       }
     });
   })();

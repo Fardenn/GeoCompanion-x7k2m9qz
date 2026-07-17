@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      2.34
+// @version      2.41
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -68,7 +68,7 @@
     style.textContent = `
       :root {
         /* Alias vers leur design system (--ds-color-*), repli sur les
-           valeurs relevées manuellement si absentes. */
+          valeurs relevées manuellement si absentes. */
         --gc-bg: var(--ds-color-purple-100, #171235);
         --gc-bg-gradient: linear-gradient(160deg, var(--ds-color-purple-90, #211a4c), var(--ds-color-purple-100, #171235));
         --gc-bg-secondary: var(--ds-color-purple-90, #211a4c);
@@ -83,7 +83,7 @@
         --gc-border: 1px solid var(--ds-color-white-10, rgba(255, 255, 255, 0.1));
         --gc-radius: var(--surface-radius-inner, 0.75rem);
         /* Police GeoGuessr héritée en live, repli sur celle détectée au
-           chargement puis repli générique. */
+          chargement puis repli générique. */
         --gc-font: var(--default-font, ${detectedFont ? detectedFont.replace(/"/g, "'") : "-apple-system, sans-serif"});
       }
 
@@ -104,7 +104,7 @@
         box-sizing: border-box;
       }
       /* z-index:1 ci-dessus = uniquement pour le dashboard (menu profil).
-         Panneaux résultat/tips remontés, sinon invisibles. */
+        Panneaux résultat/tips remontés, sinon invisibles. */
       #geo-companion-panel,
       #geo-companion-tips-panel {
         z-index: 999999;
@@ -158,10 +158,10 @@
       }
       .gc-btn--secondary { background: var(--gc-bg-secondary-hover); }
       /* Icônes simples (fond transparent) toujours utilisées en accent : une
-         seule classe plutôt que gc-btn--icon + gc-btn--icon-accent séparées. */
+        seule classe plutôt que gc-btn--icon + gc-btn--icon-accent séparées. */
       .gc-icon-btn { background: none; padding: 2px 4px; font-size: 15px; color: var(--gc-accent); }
       /* Icônes en médaillon (fond sombre semi-transparent, sur une image) :
-         une classe par couleur plutôt que la base + un modificateur couleur. */
+        une classe par couleur plutôt que la base + un modificateur couleur. */
       .gc-btn--edit-tip { background: rgba(0, 0, 0, 0.55); border-radius: 5px; padding: 4px 6px; font-size: 16px; color: var(--gc-accent); }
       .gc-btn--delete-tip { background: rgba(0, 0, 0, 0.55); border-radius: 5px; padding: 4px 6px; font-size: 16px; color: var(--gc-danger); }
       .gc-btn-row { display: flex; gap: 4px; }
@@ -191,7 +191,7 @@
       .gc-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
       .gc-grid-2--compact { gap: 3px 4px; }
       /* max 2 colonnes : largeur mini = 150px ou moitié du conteneur si
-         plus grande — au-delà, impossible de caser une 3e colonne. */
+        plus grande — au-delà, impossible de caser une 3e colonne. */
       .gc-grid-2--responsive { grid-template-columns: repeat(auto-fit, minmax(max(150px, calc(50% - 2px)), 1fr)); }
       .gc-span-2 { grid-column: 1 / span 2; }
       .gc-hr { opacity: 0.15; margin: 12px 0; border-color: #888; }
@@ -240,9 +240,25 @@
       .gc-result-panel { top: 20px; right: 20px; width: clamp(300px, 18.75vw, 480px); max-height: 80vh; overflow-y: auto; font-size: 20px; }
       .gc-tips-panel { top: 20px; left: 20px; width: clamp(300px, 18.75vw, 480px); height: auto; max-height: 85vh; padding: 14px; font-size: 19px; }
       /* Duel : les panneaux sont positionnés trop haut par défaut (recouvrent
-         l'interface native du duel) — abaissés à ~20% du haut de l'écran. */
+        l'interface native du duel) — abaissés à ~20% du haut de l'écran. */
       .gc-panel--duel-offset { top: 20% !important; }
       .gc-dashboard-panel { top: 70px; right: 304px; width: clamp(340px, 21vw, 536px); max-height: 61vh; padding: 12px; font-size: clamp(11px, 0.95vw, 14px); }
+
+
+      .widget_root__KcxU_:nth-child(1) {
+        anchor-name: --gc-widget;
+      }
+      .gc-dashboard-panel {
+        position-anchor: --gc-widget;
+        left: anchor(left);
+        width: anchor-size(width);
+        top: 70px;
+        bottom: auto;
+        height: auto;
+        max-height: calc(anchor(top) - 70px - 1rem);
+        overflow-y: auto;
+      }
+  
       .gc-lightbox-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); display: flex; align-items: center; justify-content: center; z-index: 9999999; cursor: zoom-out; }
       .gc-lightbox-img { max-width: 90vw; max-height: 90vh; border-radius: 8px; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6); }
       .gc-flag-img { width: auto; vertical-align: middle; display: inline-block; border-radius: 2px; }
@@ -279,7 +295,7 @@
       .gc-textarea-md { min-height: 60px; }
       .gc-continent-btn { padding-left: 6px; padding-right: 6px; }
       /* OK/Annuler des mini-formulaires d'édition (route/champ/voiture/tip) :
-         une classe par rôle plutôt que btn--flex + couleur + padding séparés. */
+        une classe par rôle plutôt que btn--flex + couleur + padding séparés. */
       .gc-btn--ok { flex: 1; background: var(--gc-accent-gradient); padding: 4px; font-size: 13px; }
       .gc-btn--cancel { flex: 1; background: var(--gc-bg-secondary-hover); padding: 4px; font-size: 13px; }
       .gc-add-tip-btn { padding: 7px; font-size: 16px; background: var(--gc-bg-secondary-hover); width: 100%; margin-top: 6px; flex-shrink: 0; }
@@ -1461,8 +1477,8 @@
                   : ''
               }
             </div>
-            <div>Score : ${row.score ?? '-'} pts</div>
-            <div>Distance : ${row.distance_km != null ? row.distance_km.toFixed(1) + ' km' : '-'}</div>
+            ${row.score != null ? `<div>Score : ${row.score} pts</div>` : ''}
+            ${row.distance_km != null ? `<div>Distance : ${row.distance_km.toFixed(1)} km</div>` : ''}
             <div id="geo-companion-result-line">Résultat : ${
               row.country_correct == null ? '…' : row.country_correct ? '✅ Pays trouvé' : '❌ Pays raté'
             }</div>
@@ -2174,70 +2190,18 @@
       if (el) el.remove();
     }
 
-    // Widget natif GeoGuessr juste en dessous duquel le dashboard doit se
-    // positionner : même largeur, écart vertical toujours identique entre
-    const DASHBOARD_REFERENCE_WIDGET_SELECTOR = '.widget_root__KcxU_';
-    const DASHBOARD_TOP = 70; // position fixe du haut du dashboard
-    const DASHBOARD_WIDGET_GAP_REM = 1; // écart à maintenir avec le widget
+function ensureDashboard() {
+  let panel = document.getElementById(DASHBOARD_ID);
 
-    // Convertit un nombre de rem en px selon la taille de police racine
-    // actuelle (mesurée à chaque appel plutôt que figée, au cas où elle
-    function remToPx(rem) {
-      const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-      return rem * rootFontSize;
-    }
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = DASHBOARD_ID;
+    panel.className = 'gc-panel gc-panel--outlined gc-dashboard-panel';
+    document.body.appendChild(panel);
+  }
 
-    // Aligne le dashboard sur le widget de référence (même largeur/position
-    // horizontale) et ajuste sa hauteur pour que l'écart avec ce widget
-    function positionDashboard(panel) {
-      const widget = document.querySelector(DASHBOARD_REFERENCE_WIDGET_SELECTOR);
-      if (!widget) return; // widget introuvable (page différente, sélecteur changé...) : on garde le CSS par défaut
-      const rect = widget.getBoundingClientRect();
-      panel.style.left = `${rect.left}px`;
-      panel.style.right = 'auto';
-      panel.style.width = `${rect.width}px`;
-      panel.style.top = `${DASHBOARD_TOP}px`;
-      const availableHeight = rect.top - remToPx(DASHBOARD_WIDGET_GAP_REM) - DASHBOARD_TOP;
-      // La liste de pays scrolle déjà en interne (#geo-companion-dashboard-list,
-      // overflow-y:auto) si jamais l'espace disponible devient trop petit —
-      panel.style.maxHeight = `${Math.max(availableHeight, 60)}px`;
-    }
-
-    // Repositionne dès que possible après un changement de layout : resize
-    // fenêtre, et ResizeObserver sur le widget lui-même pour les cas où sa
-    let dashboardWidgetResizeObserver = null;
-    function watchDashboardReferenceWidget() {
-      const panel = document.getElementById(DASHBOARD_ID);
-      if (!panel) return;
-      positionDashboard(panel);
-      const widget = document.querySelector(DASHBOARD_REFERENCE_WIDGET_SELECTOR);
-      if (widget && dashboardWidgetResizeObserver) {
-        dashboardWidgetResizeObserver.disconnect();
-        dashboardWidgetResizeObserver.observe(widget);
-      }
-    }
-    if (typeof ResizeObserver !== 'undefined') {
-      dashboardWidgetResizeObserver = new ResizeObserver(() => {
-        const panel = document.getElementById(DASHBOARD_ID);
-        if (panel) positionDashboard(panel);
-      });
-    }
-    pageWindow.addEventListener('resize', () => {
-      const panel = document.getElementById(DASHBOARD_ID);
-      if (panel) positionDashboard(panel);
-    });
-
-    function ensureDashboard() {
-      let panel = document.getElementById(DASHBOARD_ID);
-      if (!panel) {
-        panel = document.createElement('div');
-        panel.id = DASHBOARD_ID;
-        panel.className = 'gc-panel gc-panel--outlined gc-dashboard-panel';
-        document.body.appendChild(panel);
-      }
-      watchDashboardReferenceWidget();
-      return panel;
-    }
+  return panel;
+}
 
     // Couleur pleine (bordure) et lavée (fond) selon le taux de réussite :
     // interpolation entre leur vrai rouge et leur vrai vert (design system

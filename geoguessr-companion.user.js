@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.66
+// @version      1.67
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -127,6 +127,16 @@
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
         line-height: 1.4;
         box-sizing: border-box;
+      }
+      /* z-index:1 ci-dessus est nécessaire uniquement pour le dashboard
+         (#geo-companion-dashboard), positionné près du menu profil de
+         GeoGuessr qu'il ne doit pas recouvrir. Les panneaux résultat/tips
+         n'ont pas ce problème (autre zone de l'écran) et se retrouvaient
+         invisibles, cachés derrière le contenu normal de la page — on les
+         remonte donc spécifiquement. */
+      #geo-companion-panel,
+      #geo-companion-tips-panel {
+        z-index: 999999;
       }
 
       /* ==== Typo ==== */

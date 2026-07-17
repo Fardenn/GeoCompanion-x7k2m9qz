@@ -46,8 +46,6 @@
   };
 
   // Events disponibles : gameStart/gameEnd/roundStart/roundEnd — payload = l'objet "game" renvoyé par l'API GeoGuessr.
-
-  // CORE: thème (variables CSS injectées, alignées sur le design system GeoGuessr)
   function injectThemeStyles() {
     if (document.getElementById('geo-companion-theme')) return; // déjà injecté
 

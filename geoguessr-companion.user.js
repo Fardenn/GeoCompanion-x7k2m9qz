@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      2.00
+// @version      2.34
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -15,7 +15,6 @@
 (function () {
   'use strict';
 
-  // ============================================================
   // CONFIG
   const SUPABASE_URL = 'https://lpbtzcpmqqsaedpdhptl.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_gH_ae7VUiLAEpuLdRBTlBA_71XF4K44';
@@ -24,7 +23,6 @@
   // utilisé, Tampermonkey exécute le script dans un sandbox où "window" ne
   const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
-  // ============================================================
   // CORE: namespace global + event bus
   const GeoCompanion = (pageWindow.GeoCompanion = pageWindow.GeoCompanion || {});
 
@@ -51,7 +49,6 @@
   // Events disponibles : 'gameStart', 'gameEnd', 'roundStart', 'roundEnd'
   // Payload : l'objet "game" tel que renvoyé par l'API GeoGuessr
 
-  // ============================================================
   // CORE: thème (variables CSS injectées, alignées sur le vrai
   function injectThemeStyles() {
     if (document.getElementById('geo-companion-theme')) return; // déjà injecté
@@ -136,7 +133,6 @@
         padding: 6px 10px;
       }
       .gc-btn:disabled { opacity: 0.6; cursor: default; }
-      .gc-btn--block { width: 100%; }
       .gc-btn--flex { flex: 1; }
       .gc-btn--flex-auto { flex: 1 1 auto; white-space: nowrap; }
       .gc-btn--lg { font-size: 16px; padding: 10px 0; border-radius: 8px; }
@@ -148,6 +144,7 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        border-radius: 999px;
       }
       .gc-btn--primary { background: var(--gc-accent-gradient); }
       .gc-btn--jouer {
@@ -160,9 +157,13 @@
         padding-bottom: 0.125rem;
       }
       .gc-btn--secondary { background: var(--gc-bg-secondary-hover); }
-      .gc-btn--danger { background: var(--gc-danger-bg); color: var(--gc-danger); }
-      .gc-btn--icon { background: none; padding: 2px 4px; font-size: 15px; }
-      .gc-btn--icon-overlay { background: rgba(0, 0, 0, 0.55); border-radius: 5px; padding: 4px 6px; font-size: 16px; }
+      /* Icônes simples (fond transparent) toujours utilisées en accent : une
+         seule classe plutôt que gc-btn--icon + gc-btn--icon-accent séparées. */
+      .gc-icon-btn { background: none; padding: 2px 4px; font-size: 15px; color: var(--gc-accent); }
+      /* Icônes en médaillon (fond sombre semi-transparent, sur une image) :
+         une classe par couleur plutôt que la base + un modificateur couleur. */
+      .gc-btn--edit-tip { background: rgba(0, 0, 0, 0.55); border-radius: 5px; padding: 4px 6px; font-size: 16px; color: var(--gc-accent); }
+      .gc-btn--delete-tip { background: rgba(0, 0, 0, 0.55); border-radius: 5px; padding: 4px 6px; font-size: 16px; color: var(--gc-danger); }
       .gc-btn-row { display: flex; gap: 4px; }
       .gc-btn-row--wrap { flex-wrap: wrap; }
 
@@ -195,7 +196,6 @@
       .gc-span-2 { grid-column: 1 / span 2; }
       .gc-hr { opacity: 0.15; margin: 12px 0; border-color: #888; }
       .gc-hr--dashed { border-style: dashed; opacity: 0.3; }
-      .gc-btn--pill { border-radius: 999px; }
       .gc-panel--outlined {
         border-radius: var(--surface-radius-outer, 1rem);
         border: 0.25rem solid oklch(from var(--ds-color-purple-100, #171235) l c h / 90%);
@@ -214,8 +214,6 @@
       }
       .gc-link { color: var(--gc-accent); text-decoration: underline; }
       .gc-img { border-radius: 5px; background: #111; display: block; cursor: zoom-in; }
-      .gc-btn--icon-accent { color: var(--gc-accent); }
-      .gc-btn--icon-danger { color: var(--gc-danger); }
       .gc-relative { position: relative; }
       .gc-mt-6 { margin-top: 6px; }
       .gc-mb-6 { margin-bottom: 6px; }
@@ -241,6 +239,9 @@
       /* ==== Composants (remplacent les style="" inline correspondants) ==== */
       .gc-result-panel { top: 20px; right: 20px; width: clamp(300px, 18.75vw, 480px); max-height: 80vh; overflow-y: auto; font-size: 20px; }
       .gc-tips-panel { top: 20px; left: 20px; width: clamp(300px, 18.75vw, 480px); height: auto; max-height: 85vh; padding: 14px; font-size: 19px; }
+      /* Duel : les panneaux sont positionnés trop haut par défaut (recouvrent
+         l'interface native du duel) — abaissés à ~20% du haut de l'écran. */
+      .gc-panel--duel-offset { top: 20% !important; }
       .gc-dashboard-panel { top: 70px; right: 304px; width: clamp(340px, 21vw, 536px); max-height: 61vh; padding: 12px; font-size: clamp(11px, 0.95vw, 14px); }
       .gc-lightbox-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); display: flex; align-items: center; justify-content: center; z-index: 9999999; cursor: zoom-out; }
       .gc-lightbox-img { max-width: 90vw; max-height: 90vh; border-radius: 8px; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6); }
@@ -262,8 +263,8 @@
       .gc-comparison-name { font-weight: 400; }
       .gc-comparison-name--me { font-weight: 700; }
       .gc-comparison-stats { font-size: 13px; opacity: 0.85; }
-      .gc-btn--collapse-dash { font-style: normal; font-size: 18px; }
-      .gc-btn--delete-dash { font-style: normal; padding: 5px 10px; }
+      .gc-btn--collapse-dash { font-style: normal; font-size: 18px; background: none; padding: 2px 4px; color: var(--gc-accent); }
+      .gc-btn--delete-dash { font-style: normal; padding: 5px 10px; border-radius: 999px; background: var(--gc-danger-bg); color: var(--gc-danger); }
       .gc-h-full-border { height: 100%; box-sizing: border-box; }
       .gc-poteau-img { height: 98px; width: auto; max-width: 100%; }
       .gc-mb-10-fs-13 { margin-bottom: 10px; font-size: 13px; }
@@ -277,11 +278,13 @@
       .gc-textarea-sm { min-height: 50px; }
       .gc-textarea-md { min-height: 60px; }
       .gc-continent-btn { padding-left: 6px; padding-right: 6px; }
-      .gc-btn--form { padding: 4px; font-size: 13px; }
-      .gc-btn--form-lg { padding: 6px; font-size: 13px; }
-      .gc-add-tip-btn { padding: 7px; font-size: 16px; }
-      .gc-btn--refresh-dash { padding: 8px 16px; }
-      .gc-btn--stats-toggle { padding: 8px; font-size: 14px; }
+      /* OK/Annuler des mini-formulaires d'édition (route/champ/voiture/tip) :
+         une classe par rôle plutôt que btn--flex + couleur + padding séparés. */
+      .gc-btn--ok { flex: 1; background: var(--gc-accent-gradient); padding: 4px; font-size: 13px; }
+      .gc-btn--cancel { flex: 1; background: var(--gc-bg-secondary-hover); padding: 4px; font-size: 13px; }
+      .gc-add-tip-btn { padding: 7px; font-size: 16px; background: var(--gc-bg-secondary-hover); width: 100%; margin-top: 6px; flex-shrink: 0; }
+      .gc-btn--refresh-dash { padding: 8px 16px; border-radius: 999px; }
+      .gc-btn--stats-toggle { padding: 8px; font-size: 14px; background: var(--gc-bg-secondary-hover); width: 100%; }
       .gc-empty-state { text-align: center; padding: 24px 0; opacity: 0.75; }
       .gc-nowrap-ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .gc-tip-image { width: 100%; max-height: 300px; object-fit: contain; }
@@ -310,7 +313,6 @@
   }
   injectThemeStyles();
 
-  // ============================================================
   // CORE: notify (notifications discrètes, non bloquantes)
 
   GeoCompanion.notify = function (message, type = 'error') {
@@ -326,7 +328,6 @@
     setTimeout(() => toast.remove(), 4000);
   };
 
-  // ============================================================
   // CORE: détection des events de partie (fetch/XHR + parsing)
   (function apiDetectionModule() {
     // --- état interne, persisté pour survivre à un rechargement de page ---
@@ -509,7 +510,7 @@
       return originalSend.apply(this, args);
     };
 
-    // --- Hook WebSocket (live challenge uniquement) ---
+    // --- Hook WebSocket (live challenge + duel) ---
     // En live challenge, GeoGuessr pousse les vrais events de round/partie
     const OriginalWebSocket = pageWindow.WebSocket;
     if (typeof OriginalWebSocket === 'function') {
@@ -577,6 +578,51 @@
               persistState();
               GeoCompanion.emit('gameEnd', data.liveChallenge?.state || lastGoodGameSnapshot || {});
             }
+          } else if (data.code === 'DuelStarted' || data.code === 'DuelNewRound') {
+            // DuelStarted = tout premier round de la partie, DuelNewRound =
+            // rounds suivants. Délai de 3s avant de masquer (demande
+            // explicite) : sinon les panneaux du round précédent
+            // disparaissent instantanément, avant d'avoir pu être lus.
+            const duelStateSnapshot = data.duel?.state || lastGoodGameSnapshot || {};
+            const source = data.code === 'DuelStarted' ? 'ws-duel-started' : 'ws-duel-new-round';
+            setTimeout(() => {
+              GeoCompanion.emit('roundStart', { ...duelStateSnapshot, _source: source });
+            }, 3000);
+          } else if (data.code === 'DuelRoundTimedOut') {
+            // Structure confirmée par capture réseau réelle : le pays est sur
+            // rounds[].panorama.countryCode (pas question.panoramaQuestionPayload
+            // comme en live challenge) — voir le repli ajouté dans extractRoundData.
+            // Pas de score/guess exploitable ici (imbriqués par équipe/joueur
+            // dans duel.state.teams[].players[].guesses) — pas géré, demande
+            // explicite : seul le pays (pour les tips) nous intéresse en duel.
+            const duelState = data.duel?.state;
+            const endedRound = duelState?.currentRoundNumber ?? duelState?.round ?? liveChallengeRound ?? currentRound ?? 1;
+            if (roundEndEmittedRound !== endedRound) {
+              const game = duelState
+                ? { ...(lastGoodGameSnapshot || {}), ...duelState, guesses: duelState.guesses ?? lastGoodGameSnapshot?.guesses ?? null }
+                : lastGoodGameSnapshot;
+              if (game) {
+                roundEndEmittedRound = endedRound;
+                liveChallengeRound = endedRound;
+                persistState();
+                lastEmittedRoundGameByRound[endedRound] = game;
+                GeoCompanion.emit('roundEnd', {
+                  ...game,
+                  round: endedRound,
+                  _source: duelState ? 'ws-duel-round-timedout' : 'ws-duel-round-timedout-http-fallback',
+                });
+              }
+            }
+          } else if (data.code === 'DuelFinished') {
+            // Contrairement au live challenge (où gameEnd se déclenche trop
+            // tôt pour masquer directement, voir plus bas), demande
+            // explicite ici : DuelFinished masque directement les panneaux.
+            if (gameState !== 'finished') {
+              gameState = 'finished';
+              persistState();
+              GeoCompanion.emit('gameEnd', data.duel?.state || lastGoodGameSnapshot || {});
+            }
+            if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
           } else if (data.code === 'LiveChallengeLeaderboardUpdate') {
             // Repli supplémentaire pour garder liveChallengeRound à jour
             // entre deux RoundEnded (utile si un message venait à être
@@ -665,7 +711,6 @@
     }
   })();
 
-  // ============================================================
   // MODULE: debugLogger
   (function debugLoggerModule() {
     GeoCompanion.on('gameStart', (game) => {
@@ -693,7 +738,6 @@
     });
   })();
 
-  // ============================================================
   // MODULE: identity
   (function identityModule() {
     const STORAGE_KEY = 'geoCompanion_playerName';
@@ -771,173 +815,90 @@
     }
   })();
 
-  // ============================================================
   // CORE: supabaseClient
+  // Toutes les méthodes partagent le même fetch + la même gestion d'erreur
+  // (log + notification) — factorisé ici plutôt que répété 6 fois.
+  async function supabaseFetch(path, options, errorLabel) {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+        ...options,
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, ...options.headers },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        console.error(`[GeoCompanion] Erreur Supabase (${errorLabel}) :`, res.status, text);
+        GeoCompanion.notify(`Échec : ${errorLabel}`, 'error');
+        return null;
+      }
+      return res;
+    } catch (e) {
+      console.error(`[GeoCompanion] Exception Supabase (${errorLabel}) :`, e);
+      GeoCompanion.notify(`Échec : ${errorLabel}`, 'error');
+      return null;
+    }
+  }
+
   const supabaseClient = {
     // insert une ou plusieurs lignes.
     // - merge: true fait un upsert avec update sur conflit (nécessite une policy RLS UPDATE)
     async insert(table, row, { merge = false, ignoreDuplicates = false } = {}) {
-      try {
-        let prefer = 'return=minimal';
-        if (merge) prefer = 'resolution=merge-duplicates,return=minimal';
-        if (ignoreDuplicates) prefer = 'resolution=ignore-duplicates,return=minimal';
-
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            Prefer: prefer,
-          },
-          body: JSON.stringify(row),
-        });
-
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          console.error(`[GeoCompanion] Erreur insertion Supabase (${table}) :`, res.status, text);
-          GeoCompanion.notify(`Échec de l'enregistrement (${table})`, 'error');
-          return false;
-        }
-        return true;
-      } catch (e) {
-        console.error(`[GeoCompanion] Exception insertion Supabase (${table}) :`, e);
-        GeoCompanion.notify(`Échec de l'enregistrement (${table})`, 'error');
-        return false;
-      }
+      let prefer = 'return=minimal';
+      if (merge) prefer = 'resolution=merge-duplicates,return=minimal';
+      if (ignoreDuplicates) prefer = 'resolution=ignore-duplicates,return=minimal';
+      const res = await supabaseFetch(
+        table,
+        { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: prefer }, body: JSON.stringify(row) },
+        `enregistrement (${table})`
+      );
+      return !!res;
     },
 
     // lecture simple avec query string PostgREST (ex: "select=*&country_code=eq.FR")
     async select(table, query = '') {
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          },
-        });
-        if (!res.ok) {
-          console.error(`[GeoCompanion] Erreur lecture Supabase (${table}) :`, res.status);
-          GeoCompanion.notify(`Échec de la lecture des données (${table})`, 'error');
-          return null;
-        }
-        return await res.json();
-      } catch (e) {
-        console.error(`[GeoCompanion] Exception lecture Supabase (${table}) :`, e);
-        GeoCompanion.notify(`Échec de la lecture des données (${table})`, 'error');
-        return null;
-      }
+      const res = await supabaseFetch(`${table}?${query}`, {}, `lecture (${table})`);
+      return res ? await res.json() : null;
     },
 
     // met à jour la ligne d'id donné avec les champs de `patch`
     async update(table, id, patch) {
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            Prefer: 'return=minimal',
-          },
-          body: JSON.stringify(patch),
-        });
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          console.error(`[GeoCompanion] Erreur update Supabase (${table}) :`, res.status, text);
-          GeoCompanion.notify(`Échec de la mise à jour (${table})`, 'error');
-          return false;
-        }
-        return true;
-      } catch (e) {
-        console.error(`[GeoCompanion] Exception update Supabase (${table}) :`, e);
-        GeoCompanion.notify(`Échec de la mise à jour (${table})`, 'error');
-        return false;
-      }
+      const res = await supabaseFetch(
+        `${table}?id=eq.${id}`,
+        { method: 'PATCH', headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: JSON.stringify(patch) },
+        `mise à jour (${table})`
+      );
+      return !!res;
     },
 
-    // supprime la ligne d'id donné
+    // supprime la ligne d'id donné (cas particulier de removeWhere)
     async remove(table, id) {
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
-          method: 'DELETE',
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            Prefer: 'return=minimal',
-          },
-        });
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          console.error(`[GeoCompanion] Erreur delete Supabase (${table}) :`, res.status, text);
-          GeoCompanion.notify(`Échec de la suppression (${table})`, 'error');
-          return false;
-        }
-        return true;
-      } catch (e) {
-        console.error(`[GeoCompanion] Exception delete Supabase (${table}) :`, e);
-        GeoCompanion.notify(`Échec de la suppression (${table})`, 'error');
-        return false;
-      }
+      return this.removeWhere(table, `id=eq.${id}`);
     },
 
     // suppression par filtre PostgREST (ex: "player_name=eq.X&played_at=gte....")
-    // plutôt que par id unique — utilisé pour les suppressions en masse.
+    // plutôt que par id unique — utilisé aussi pour les suppressions en masse.
     async removeWhere(table, query) {
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
-          method: 'DELETE',
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            Prefer: 'return=minimal',
-          },
-        });
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          console.error(`[GeoCompanion] Erreur delete Supabase (${table}) :`, res.status, text);
-          GeoCompanion.notify(`Échec de la suppression (${table})`, 'error');
-          return false;
-        }
-        return true;
-      } catch (e) {
-        console.error(`[GeoCompanion] Exception delete Supabase (${table}) :`, e);
-        GeoCompanion.notify(`Échec de la suppression (${table})`, 'error');
-        return false;
-      }
+      const res = await supabaseFetch(
+        `${table}?${query}`,
+        { method: 'DELETE', headers: { Prefer: 'return=minimal' } },
+        `suppression (${table})`
+      );
+      return !!res;
     },
 
     // appel d'une fonction Postgres (RPC) — utilisé pour les agrégats
     // calculés côté base plutôt que côté client (voir supabase-stats-functions.sql)
     async rpc(fnName, params = {}) {
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fnName}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify(params),
-        });
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          console.error(`[GeoCompanion] Erreur RPC Supabase (${fnName}) :`, res.status, text);
-          GeoCompanion.notify(`Échec du calcul des statistiques`, 'error');
-          return null;
-        }
-        return await res.json();
-      } catch (e) {
-        console.error(`[GeoCompanion] Exception RPC Supabase (${fnName}) :`, e);
-        GeoCompanion.notify(`Échec du calcul des statistiques`, 'error');
-        return null;
-      }
+      const res = await supabaseFetch(
+        `rpc/${fnName}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) },
+        'calcul des statistiques'
+      );
+      return res ? await res.json() : null;
     },
   };
 
   GeoCompanion.supabase = supabaseClient;
 
-  // ============================================================
   // CORE: reverseGeocode
   async function reverseGeocodeCountry(lat, lng) {
     try {
@@ -956,7 +917,6 @@
     }
   }
 
-  // ============================================================
   // CORE: geoData (mapping pays -> continent)
   const CONTINENT_BY_COUNTRY = (() => {
     const map = {};
@@ -1035,7 +995,6 @@
     'UY', 'VU', 'VN', 'VI',
   ]);
 
-  // ============================================================
   // MODULE: roundHistory
   (function roundHistoryModule() {
     let warnedMapOnce = false;
@@ -1045,14 +1004,9 @@
     GeoCompanion.on('gameStart', () => recordedRoundKeys.clear());
 
     function extractRoundData(game) {
-      // Repli identique à apiDetectionModule::deriveRoundNumber (module
-      // séparé, pas de closure partagée) : certaines réponses live
-      let round = game.round ?? game.roundNumber ?? game.currentRoundNumber;
-      const roundsInfoForDerive = game.rounds;
-      if (typeof round !== 'number' && Array.isArray(roundsInfoForDerive) && roundsInfoForDerive.length > 0) {
-        const ongoingIndex = roundsInfoForDerive.findIndex((r) => r && r.state != null && !/ended/i.test(r.state));
-        round = ongoingIndex !== -1 ? ongoingIndex + 1 : roundsInfoForDerive.length;
-      }
+      // Round toujours déjà présent ici : injecté explicitement par le hook
+      // WS pour le live challenge, natif pour les autres modes.
+      const round = game.round ?? game.roundNumber ?? game.currentRoundNumber;
 
       // Les infos du lieu réel du round sont généralement dans un tableau
       // "rounds" indexé par (round - 1).
@@ -1065,16 +1019,19 @@
 
       // Live challenge : les coordonnées réelles sont imbriquées dans
       // answer.coordinateAnswerPayload.coordinate — mais ce champ "answer"
+      // Duel : directement sur rounds[].panorama (confirmé par capture réseau réelle).
       const actualLat =
         roundInfo.lat ??
         roundInfo.location?.lat ??
         roundInfo.answer?.coordinateAnswerPayload?.coordinate?.lat ??
-        roundInfo.question?.panoramaQuestionPayload?.panorama?.lat;
+        roundInfo.question?.panoramaQuestionPayload?.panorama?.lat ??
+        roundInfo.panorama?.lat;
       const actualLng =
         roundInfo.lng ??
         roundInfo.location?.lng ??
         roundInfo.answer?.coordinateAnswerPayload?.coordinate?.lng ??
-        roundInfo.question?.panoramaQuestionPayload?.panorama?.lng;
+        roundInfo.question?.panoramaQuestionPayload?.panorama?.lng ??
+        roundInfo.panorama?.lng;
       const guessLat = guess.lat ?? guess.position?.lat;
       const guessLng = guess.lng ?? guess.position?.lng;
       // Pas de code pays direct en live challenge (juste des coordonnées) —
@@ -1083,10 +1040,12 @@
         roundInfo.streakLocationCode ??
         roundInfo.countryCode ??
         roundInfo.question?.panoramaQuestionPayload?.panorama?.countryCode ??
+        roundInfo.panorama?.countryCode ??
         null;
       // Confirmé par capture réseau réelle : ce champ arrive en minuscule
       // en live challenge ("gh", "br"...) alors que le reste du script (DB,
       const actualCountry = actualCountryRaw ? actualCountryRaw.toUpperCase() : null;
+
 
       // Live challenge : score/distance sont des valeurs directes sur le
       // guess (guess.score, guess.distance), pas imbriquées comme en classique.
@@ -1107,7 +1066,7 @@
         score,
         distance_km: distanceMeters != null ? distanceMeters / 1000 : null,
         country_correct: null, // rempli après coup via reverse-geocoding (voir handler roundEnd)
-        game_mode: game.mode || game.gameMode || (game.hostId ? 'live-challenge' : null),
+        game_mode: game.mode || game.gameMode || (game.hostId ? 'live-challenge' : game._source?.startsWith('ws-duel') ? 'duel' : null),
         map_id: game.map || game.mapSlug || game.options?.mapSlug || null,
         map_name: game.mapName || null,
         time_remaining_s:
@@ -1170,7 +1129,11 @@
       // On n'enregistre dans Supabase QUE lorsque le score est connu : soit
       // directement ici si le joueur avait déjà guessé au moment du
       const recordKey = `${row.game_token}:${row.round_number}`;
-      if (row.score == null) {
+      if (row.game_mode === 'duel') {
+        // Demande explicite : pas d'enregistrement en duel (uniquement
+        // l'affichage des tips), pas d'attente de score non plus.
+        console.log('[GeoCompanion] Duel : pas d\'enregistrement (pays uniquement).');
+      } else if (row.score == null) {
         console.log('[GeoCompanion] ⏳ Score pas encore connu pour ce round — enregistrement différé.');
       } else if (recordedRoundKeys.has(recordKey)) {
         console.log('[GeoCompanion] Round déjà enregistré, pas de ré-insertion.');
@@ -1184,7 +1147,6 @@
     });
   })();
 
-  // ============================================================
   // MODULE: stats
   (function statsModule() {
     // Convertit un filterKey ('24h'|'7d'|'30d'|'all') en timestamp ISO,
@@ -1220,40 +1182,6 @@
           successRate: r.success_rate != null ? Math.round(r.success_rate) : null,
         }))
         .sort((a, b) => (b.avgScore ?? -1) - (a.avgScore ?? -1));
-    }
-
-    async function getCountryStats(countryCode, filterKey = 'all') {
-      const rows = await supabaseClient.rpc('get_country_stats', {
-        p_country_code: countryCode,
-        p_since: sinceTimestamp(filterKey),
-      });
-      return toAggregateStats(rows && rows[0]);
-    }
-
-    async function getContinentStats(continent, filterKey = 'all') {
-      const rows = await supabaseClient.rpc('get_continent_stats', {
-        p_continent: continent,
-        p_since: sinceTimestamp(filterKey),
-      });
-      return toAggregateStats(rows && rows[0]);
-    }
-
-    async function getMapStats(mapId, filterKey = 'all') {
-      const rows = await supabaseClient.rpc('get_map_stats', {
-        p_map_id: mapId,
-        p_since: sinceTimestamp(filterKey),
-      });
-      return toAggregateStats(rows && rows[0]);
-    }
-
-    // Comparaison entre joueurs pour un pays donné : moyenne/taux de réussite
-    // par joueur, triés du meilleur au moins bon score moyen.
-    async function getPlayerComparison(countryCode, filterKey = 'all') {
-      const rows = await supabaseClient.rpc('get_player_comparison', {
-        p_country_code: countryCode,
-        p_since: sinceTimestamp(filterKey),
-      });
-      return toComparisonRows(rows);
     }
 
     // Stats groupées par pays (avec leur continent) pour un joueur donné —
@@ -1308,17 +1236,12 @@
     }
 
     GeoCompanion.stats = {
-      getCountryStats,
-      getContinentStats,
-      getMapStats,
-      getPlayerComparison,
       getAllCountryStats,
       getRoundEndStats,
       deleteRoundsForPlayer,
     };
   })();
 
-  // ============================================================
   // MODULE: tips
   (function tipsModule() {
     async function listTipsForCountry(countryCode) {
@@ -1361,7 +1284,6 @@
     GeoCompanion.tips = { listTipsForCountry, addTip, updateTip, deleteTip };
   })();
 
-  // ============================================================
   // MODULE: countryInfo
   (function countryInfoModule() {
     // Retourne toutes les métadonnées d'un pays en une seule requête,
@@ -1396,7 +1318,6 @@
     GeoCompanion.countryInfo = { getCountryInfo, setCountryInfoField, setCountryInfoFields };
   })();
 
-  // ============================================================
   // MODULE: uiPanel
   (function uiPanelModule() {
     const PANEL_ID = 'geo-companion-panel';
@@ -1548,7 +1469,7 @@
           </div>
         </div>
         <hr class="gc-hr">
-        <button id="geo-companion-toggle-stats-btn" class="gc-btn gc-btn--secondary gc-btn--block gc-btn--stats-toggle">📊 Voir les stats</button>
+        <button id="geo-companion-toggle-stats-btn" class="gc-btn gc-btn--stats-toggle">📊 Voir les stats</button>
         <div id="geo-companion-stats-section" class="gc-stats-section gc-collapsed">
           <div id="geo-companion-stats">Chargement des statistiques…</div>
           <hr class="gc-hr">
@@ -1693,8 +1614,8 @@
 
     function tipHtml(tip) {
       const buttonsHtml = `
-        <button data-edit-tip="${tip.id}" class="gc-btn gc-btn--icon-overlay gc-btn--icon-accent" title="Modifier">✏️</button>
-        <button data-delete-tip="${tip.id}" class="gc-btn gc-btn--icon-overlay gc-btn--icon-danger" title="Supprimer">🗑️</button>
+        <button data-edit-tip="${tip.id}" class="gc-btn gc-btn--edit-tip" title="Modifier">✏️</button>
+        <button data-delete-tip="${tip.id}" class="gc-btn gc-btn--delete-tip" title="Supprimer">🗑️</button>
       `;
 
       return `
@@ -1727,8 +1648,8 @@
             tip ? tip.image_url || '' : ''
           }" class="gc-input gc-input--compact">
           <div class="gc-btn-row gc-mt-6">
-            <button id="geo-companion-tip-save" class="gc-btn gc-btn--flex gc-btn--primary gc-btn--form-lg">Enregistrer</button>
-            <button id="geo-companion-tip-cancel" class="gc-btn gc-btn--flex gc-btn--secondary gc-btn--form-lg">Annuler</button>
+            <button id="geo-companion-tip-save" class="gc-btn gc-btn--ok">Enregistrer</button>
+            <button id="geo-companion-tip-cancel" class="gc-btn gc-btn--cancel">Annuler</button>
           </div>
         </div>
       `;
@@ -1761,6 +1682,7 @@
     async function renderTips(row) {
       const tips = await GeoCompanion.tips.listTipsForCountry(row.country_code);
       const tipsPanel = ensureTipsPanel();
+      tipsPanel.classList.toggle('gc-panel--duel-offset', row.game_mode === 'duel');
 
       const plonkitUrl = plonkitUrlFromCode(row.country_code);
       const info = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
@@ -1775,8 +1697,8 @@
             }
           </div>
           <div class="gc-flex-gap-6">
-            <button id="geo-companion-tips-refresh-btn" title="Actualiser les tips" class="gc-btn gc-btn--icon gc-btn--icon-accent gc-fs-16">🔄</button>
-            <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--icon gc-btn--icon-accent gc-fs-18">▼</button>
+            <button id="geo-companion-tips-refresh-btn" title="Actualiser les tips" class="gc-btn gc-icon-btn gc-fs-16">🔄</button>
+            <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-icon-btn gc-fs-18">▼</button>
           </div>
         </div>
         <div id="geo-companion-tips-body" class="gc-flex-col-fill">
@@ -1792,7 +1714,7 @@
                 : `<div class="gc-grid-2">${tips.map(tipHtml).join('')}</div>`
             }
           </div>
-          <button id="geo-companion-add-tip-btn" class="gc-btn gc-btn--secondary gc-btn--block gc-mt-6 gc-shrink-0 gc-add-tip-btn">+ Ajouter un tip</button>
+          <button id="geo-companion-add-tip-btn" class="gc-btn gc-add-tip-btn">+ Ajouter un tip</button>
           <div id="geo-companion-tip-form" class="gc-shrink-0"></div>
         </div>
       `;
@@ -1851,7 +1773,7 @@
         <div class="gc-card gc-h-full-border">
           <div class="gc-card-header">
             <span class="gc-label">Route 🚗 ${drivingSideLabel(info.driving_side)}</span>
-            <button data-edit-route class="gc-btn gc-btn--icon gc-btn--icon-accent" title="Modifier">✏️</button>
+            <button data-edit-route class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
           </div>
           <div data-route-display class="gc-mt-2">
             ${
@@ -1889,8 +1811,8 @@
             }">➡️ Droite</button>
           </div>
           <div class="gc-btn-row gc-mt-6">
-            <button data-save-route class="gc-btn gc-btn--flex gc-btn--primary gc-btn--form">OK</button>
-            <button data-cancel-route class="gc-btn gc-btn--flex gc-btn--secondary gc-btn--form">Annuler</button>
+            <button data-save-route class="gc-btn gc-btn--ok">OK</button>
+            <button data-cancel-route class="gc-btn gc-btn--cancel">Annuler</button>
           </div>
         `;
 
@@ -1974,7 +1896,7 @@
             <div class="gc-card ${f.fullWidth ? 'gc-span-2' : ''}">
               <div class="gc-card-header">
                 <span class="gc-label">${f.label}</span>
-                <button data-edit-field="${f.key}" class="gc-btn gc-btn--icon gc-btn--icon-accent" title="Modifier">✏️</button>
+                <button data-edit-field="${f.key}" class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
               </div>
               <div data-field-display="${f.key}" class="gc-mt-2">${countryInfoFieldDisplay(
                 f,
@@ -1999,8 +1921,8 @@
 
           const actionsHtml = `
             <div class="gc-btn-row gc-mt-4">
-              <button data-save-field class="gc-btn gc-btn--flex gc-btn--primary gc-btn--form">OK</button>
-              <button data-cancel-field class="gc-btn gc-btn--flex gc-btn--secondary gc-btn--form">Annuler</button>
+              <button data-save-field class="gc-btn gc-btn--ok">OK</button>
+              <button data-cancel-field class="gc-btn gc-btn--cancel">Annuler</button>
             </div>
           `;
 
@@ -2063,7 +1985,7 @@
         <div class="gc-card">
           <div class="gc-card-header">
             <span class="gc-label">Voiture</span>
-            <button data-edit-voiture class="gc-btn gc-btn--icon gc-btn--icon-accent" title="Modifier">✏️</button>
+            <button data-edit-voiture class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
           </div>
           <div data-voiture-display class="gc-mt-2">
             ${
@@ -2098,8 +2020,8 @@
             Exclusif au pays
           </label>
           <div class="gc-btn-row gc-mt-6">
-            <button data-save-voiture class="gc-btn gc-btn--flex gc-btn--primary gc-btn--form">OK</button>
-            <button data-cancel-voiture class="gc-btn gc-btn--flex gc-btn--secondary gc-btn--form">Annuler</button>
+            <button data-save-voiture class="gc-btn gc-btn--ok">OK</button>
+            <button data-cancel-voiture class="gc-btn gc-btn--cancel">Annuler</button>
           </div>
         `;
 
@@ -2129,6 +2051,7 @@
     // stats) — factorisé pour être réutilisable à la fois depuis l'event
     async function displayRoundResult(row) {
       const panel = ensurePanel();
+      panel.classList.toggle('gc-panel--duel-offset', row.game_mode === 'duel');
       renderRoundResult(panel, row);
       await renderTips(row);
 
@@ -2162,6 +2085,11 @@
 
     GeoCompanion.on('gameStart', () => {
       GM_setValue(LAST_DISPLAY_KEY, { row: null, visible: false });
+      // Filet de sécurité : si on enchaîne directement d'une partie à une
+      // autre (ex: duel après un live challenge) sans repasser par une page
+      // hors partie, checkHomepage() ne voit jamais la transition — on
+      // masque donc aussi ici, sur tout nouveau démarrage de partie.
+      if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
     });
 
     GeoCompanion.on('roundRecorded', async (row) => {
@@ -2209,12 +2137,14 @@
 
     // Restauration au chargement du script : si la page est rechargée juste
     // après la fin d'un round (avant le round suivant), on réaffiche
+    // — seulement si on est encore sur une page de jeu : sinon (rechargement
+    // complet vers une page sans rapport après avoir quitté une partie), les
+    // panneaux réapparaîtraient à tort sur cette page.
     const lastDisplay = GM_getValue(LAST_DISPLAY_KEY, null);
-    if (lastDisplay?.visible && lastDisplay.row) {
+    if (lastDisplay?.visible && lastDisplay.row && isGameplayUrl(pageWindow.location.pathname)) {
       displayRoundResult(lastDisplay.row);
     }
 
-    // ==========================================================
     // DASHBOARD (page d'accueil)
     const DASHBOARD_ID = 'geo-companion-dashboard';
     const CONTINENT_ORDER = ['europe', 'asia', 'africa', 'north_america', 'south_america', 'oceania'];
@@ -2234,7 +2164,7 @@
     // URL qui correspond à une partie en cours (classique, challenge, live
     // challenge, battle royale, duels...), écran de résultats/leaderboard
     function isGameplayUrl(pathname) {
-      return /\/(game|live-challenge|challenge|battle-royale|duels)\//i.test(pathname);
+      return /\/(game|live-challenge|challenge|battle-royale|duels?)\//i.test(pathname);
     }
 
     let wasInGameplayUrl = isGameplayUrl(pageWindow.location.pathname);
@@ -2413,7 +2343,7 @@
       listEl.innerHTML = `
         <div class="gc-empty-state">
           <div class="gc-mb-10-fs-13">Aucune donnée chargée pour cette période.</div>
-          <button id="geo-companion-dashboard-refresh-btn" class="gc-btn gc-btn--jouer gc-btn--pill gc-btn--refresh-dash">🔄 Actualiser</button>
+          <button id="geo-companion-dashboard-refresh-btn" class="gc-btn gc-btn--jouer gc-btn--refresh-dash">🔄 Actualiser</button>
         </div>
       `;
 
@@ -2433,8 +2363,8 @@
         <div class="gc-card-header gc-mb-6 gc-shrink-0">
           <div class="gc-title gc-fs-16">Mes stats</div>
           <div class="gc-flex-gap-6">
-            <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--danger gc-btn--pill gc-btn--delete-dash">🗑️</button>
-            <button id="geo-companion-dashboard-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--icon gc-btn--icon-accent gc-btn--collapse-dash">${
+            <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--delete-dash">🗑️</button>
+            <button id="geo-companion-dashboard-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--collapse-dash">${
               dashboardCollapsed ? '▶' : '▼'
             }</button>
           </div>
@@ -2444,7 +2374,7 @@
           <div class="gc-btn-row gc-mb-8 gc-shrink-0">
             ${FILTERS.map(
               (f) => `
-              <button data-dash-filter="${f.key}" class="gc-btn gc-btn--flex gc-btn--pill gc-btn--xs ${
+              <button data-dash-filter="${f.key}" class="gc-btn gc-btn--flex gc-btn--xs ${
                 f.key === dashboardActiveFilter ? 'gc-btn--jouer' : 'gc-btn--secondary'
               }">${f.label}</button>
             `
@@ -2453,7 +2383,7 @@
           <div class="gc-btn-row gc-btn-row--wrap gc-mb-10 gc-shrink-0">
             ${CONTINENT_ORDER.map(
               (c) => `
-              <button data-dash-continent="${c}" class="gc-btn gc-btn--flex-auto gc-btn--pill gc-btn--xs gc-continent-btn ${
+              <button data-dash-continent="${c}" class="gc-btn gc-btn--flex-auto gc-btn--xs gc-continent-btn ${
                 c === dashboardActiveContinent ? 'gc-btn--jouer' : 'gc-btn--secondary'
               }">${CONTINENT_LABELS[c]}</button>
             `

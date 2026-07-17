@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.80
+// @version      2.00
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -17,22 +17,15 @@
 
   // ============================================================
   // CONFIG
-  // ============================================================
   const SUPABASE_URL = 'https://lpbtzcpmqqsaedpdhptl.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_gH_ae7VUiLAEpuLdRBTlBA_71XF4K44';
 
   // Accès au vrai contexte de la page : dès qu'un @grant autre que "none" est
   // utilisé, Tampermonkey exécute le script dans un sandbox où "window" ne
-  // pointe plus vers la page réelle. unsafeWindow le fait.
   const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
   // ============================================================
   // CORE: namespace global + event bus
-  // ------------------------------------------------------------
-  // Chaque module s'abonne aux events qui l'intéressent via
-  // GeoCompanion.on(nom, callback). Le core ne fait qu'émettre,
-  // il ne connaît pas les modules qui l'écoutent.
-  // ============================================================
   const GeoCompanion = (pageWindow.GeoCompanion = pageWindow.GeoCompanion || {});
 
   GeoCompanion._listeners = {};
@@ -60,24 +53,11 @@
 
   // ============================================================
   // CORE: thème (variables CSS injectées, alignées sur le vrai
-  // thème GeoGuessr)
-  // ------------------------------------------------------------
-  // Les couleurs/rayons/etc. sont des alias vers les vraies variables
-  // CSS de GeoGuessr (--ds-color-*, --surface-radius-*...), avec repli
-  // sur les valeurs exactes relevées manuellement dans leur CSS si ces
-  // variables ne sont pas exposées (ex: var(--ds-color-brand-50, #7950e5)).
-  // La résolution se fait nativement par le navigateur via CSS, pas
-  // besoin de scanner nous-mêmes leurs feuilles de style pour ça.
-  // Centralise tout en un seul endroit — un seul thème à ajuster au
-  // lieu de chercher/remplacer des codes hex dans tout le fichier.
-  // ============================================================
   function injectThemeStyles() {
     if (document.getElementById('geo-companion-theme')) return; // déjà injecté
 
     // Police réellement utilisée par GeoGuessr sur cette page (fonctionne
     // même si leur police maison "Geoguessr Sans" n'est pas publiquement
-    // accessible — on hérite simplement de la valeur déjà chargée par eux).
-    // Sert de repli si var(--default-font) n'est pas trouvable.
     let detectedFont = null;
     try {
       const bodyFont = pageWindow.getComputedStyle(document.body).fontFamily;
@@ -90,9 +70,8 @@
     style.id = 'geo-companion-theme';
     style.textContent = `
       :root {
-        /* Alias vers leur design system quand disponible (--ds-color-*),
-           avec repli sur les valeurs exactes qu'on leur a vues (relevées
-           manuellement dans leur CSS) si ces variables ne sont pas trouvées. */
+        /* Alias vers leur design system (--ds-color-*), repli sur les
+           valeurs relevées manuellement si absentes. */
         --gc-bg: var(--ds-color-purple-100, #171235);
         --gc-bg-gradient: linear-gradient(160deg, var(--ds-color-purple-90, #211a4c), var(--ds-color-purple-100, #171235));
         --gc-bg-secondary: var(--ds-color-purple-90, #211a4c);
@@ -106,9 +85,8 @@
         --gc-text: var(--ds-color-white-100, #fff);
         --gc-border: 1px solid var(--ds-color-white-10, rgba(255, 255, 255, 0.1));
         --gc-radius: var(--surface-radius-inner, 0.75rem);
-        /* var(--default-font) = variable réelle de GeoGuessr (héritée en live,
-           toujours synchronisée) ; repli sur la police détectée au chargement,
-           puis repli générique si rien n'est trouvable du tout. */
+        /* Police GeoGuessr héritée en live, repli sur celle détectée au
+           chargement puis repli générique. */
         --gc-font: var(--default-font, ${detectedFont ? detectedFont.replace(/"/g, "'") : "-apple-system, sans-serif"});
       }
 
@@ -128,12 +106,8 @@
         line-height: 1.4;
         box-sizing: border-box;
       }
-      /* z-index:1 ci-dessus est nécessaire uniquement pour le dashboard
-         (#geo-companion-dashboard), positionné près du menu profil de
-         GeoGuessr qu'il ne doit pas recouvrir. Les panneaux résultat/tips
-         n'ont pas ce problème (autre zone de l'écran) et se retrouvaient
-         invisibles, cachés derrière le contenu normal de la page — on les
-         remonte donc spécifiquement. */
+      /* z-index:1 ci-dessus = uniquement pour le dashboard (menu profil).
+         Panneaux résultat/tips remontés, sinon invisibles. */
       #geo-companion-panel,
       #geo-companion-tips-panel {
         z-index: 999999;
@@ -215,9 +189,8 @@
       /* ==== Mise en page ==== */
       .gc-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
       .gc-grid-2--compact { gap: 3px 4px; }
-      /* max 2 colonnes : la largeur mini d'une colonne est 150px, ou la
-         moitié du conteneur (moins la moitié du gap) si celle-ci dépasse
-         150px — au-delà, auto-fit ne peut plus caser une 3e colonne. */
+      /* max 2 colonnes : largeur mini = 150px ou moitié du conteneur si
+         plus grande — au-delà, impossible de caser une 3e colonne. */
       .gc-grid-2--responsive { grid-template-columns: repeat(auto-fit, minmax(max(150px, calc(50% - 2px)), 1fr)); }
       .gc-span-2 { grid-column: 1 / span 2; }
       .gc-hr { opacity: 0.15; margin: 12px 0; border-color: #888; }
@@ -250,6 +223,74 @@
       .gc-mb-10 { margin-bottom: 10px; }
       .gc-shrink-0 { flex-shrink: 0; }
       .gc-img-overlay-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; }
+
+      /* ==== Utilitaires ajoutés pour remplacer les styles inline ==== */
+      .gc-fs-13 { font-size: 13px; }
+      .gc-fs-14 { font-size: 14px; }
+      .gc-fs-16 { font-size: 16px; }
+      .gc-fs-17 { font-size: 17px; }
+      .gc-fs-18 { font-size: 18px; }
+      .gc-mt-2 { margin-top: 2px; }
+      .gc-mb-2 { margin-bottom: 2px; }
+      .gc-mt-4 { margin-top: 4px; }
+      .gc-opacity-5 { opacity: 0.5; }
+      .gc-opacity-8 { opacity: 0.8; }
+      .gc-pre-line { white-space: pre-line; }
+      .gc-collapsed { display: none !important; }
+
+      /* ==== Composants (remplacent les style="" inline correspondants) ==== */
+      .gc-result-panel { top: 20px; right: 20px; width: clamp(300px, 18.75vw, 480px); max-height: 80vh; overflow-y: auto; font-size: 20px; }
+      .gc-tips-panel { top: 20px; left: 20px; width: clamp(300px, 18.75vw, 480px); height: auto; max-height: 85vh; padding: 14px; font-size: 19px; }
+      .gc-dashboard-panel { top: 70px; right: 304px; width: clamp(340px, 21vw, 536px); max-height: 61vh; padding: 12px; font-size: clamp(11px, 0.95vw, 14px); }
+      .gc-lightbox-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); display: flex; align-items: center; justify-content: center; z-index: 9999999; cursor: zoom-out; }
+      .gc-lightbox-img { max-width: 90vw; max-height: 90vh; border-radius: 8px; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6); }
+      .gc-flag-img { width: auto; vertical-align: middle; display: inline-block; border-radius: 2px; }
+      .gc-flag-img--round { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4); }
+      .gc-flag-img--list { margin-right: 4px; }
+      .gc-round-header { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
+      .gc-round-info { flex: 1; min-width: 0; }
+      .gc-checkbox-label { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; cursor: pointer; }
+      .gc-flex-col-fill { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+      .gc-poteau-grid { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+      .gc-flex-gap-6 { display: flex; gap: 6px; }
+      .gc-flex-end-gap-8 { display: flex; justify-content: flex-end; gap: 8px; }
+      .gc-stats-section { margin-top: 10px; }
+      .gc-scroll-fill { flex: 1; overflow-y: auto; min-height: 0; }
+      .gc-country-stats { font-size: 12px; opacity: 0.9; white-space: nowrap; flex-shrink: 0; }
+      .gc-comparison-row { padding: 6px 8px; border-radius: 6px; margin-bottom: 2px; }
+      .gc-comparison-row--me { background: var(--gc-bg-secondary-hover); }
+      .gc-comparison-name { font-weight: 400; }
+      .gc-comparison-name--me { font-weight: 700; }
+      .gc-comparison-stats { font-size: 13px; opacity: 0.85; }
+      .gc-btn--collapse-dash { font-style: normal; font-size: 18px; }
+      .gc-btn--delete-dash { font-style: normal; padding: 5px 10px; }
+      .gc-h-full-border { height: 100%; box-sizing: border-box; }
+      .gc-poteau-img { height: 98px; width: auto; max-width: 100%; }
+      .gc-mb-10-fs-13 { margin-bottom: 10px; font-size: 13px; }
+      .gc-tip-content { margin-bottom: 4px; white-space: pre-wrap; font-size: 18px; }
+      .gc-mt-4-fs-13 { margin-top: 4px; font-size: 13px; }
+      .gc-tip-form-card { margin-top: 6px; border-radius: 8px; }
+      .gc-hr-tight { margin: 0 0 10px; }
+      .gc-route-img { max-height: 98px; max-width: 100%; display: block; margin-top: 4px; }
+      .gc-field-img { max-height: 98px; max-width: 100%; margin-top: 2px; }
+      .gc-voiture-img { max-height: 98px; max-width: 100%; margin-top: 4px; }
+      .gc-textarea-sm { min-height: 50px; }
+      .gc-textarea-md { min-height: 60px; }
+      .gc-continent-btn { padding-left: 6px; padding-right: 6px; }
+      .gc-btn--form { padding: 4px; font-size: 13px; }
+      .gc-btn--form-lg { padding: 6px; font-size: 13px; }
+      .gc-add-tip-btn { padding: 7px; font-size: 16px; }
+      .gc-btn--refresh-dash { padding: 8px 16px; }
+      .gc-btn--stats-toggle { padding: 8px; font-size: 14px; }
+      .gc-empty-state { text-align: center; padding: 24px 0; opacity: 0.75; }
+      .gc-nowrap-ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .gc-tip-image { width: 100%; max-height: 300px; object-fit: contain; }
+      .gc-tip-card { border-radius: 8px; font-size: 16px; }
+      .gc-country-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 10px; overflow: hidden; border-left: 4px solid transparent; }
+      .gc-field-highlight { font-weight: bold; font-size: 22px; }
+      .gc-driving-btn { padding: 4px; font-size: 11px; background: var(--gc-bg-secondary-hover); }
+      .gc-driving-btn--active { background: var(--gc-accent-gradient); }
+
       .gc-toast {
         position: fixed;
         bottom: 20px;
@@ -271,12 +312,6 @@
 
   // ============================================================
   // CORE: notify (notifications discrètes, non bloquantes)
-  // ------------------------------------------------------------
-  // Point d'entrée unique pour signaler une erreur à l'utilisateur —
-  // remplace le mélange précédent console.error (invisible) / alert
-  // (bloquant). Toast discret en bas de l'écran, auto-disparaît ;
-  // le détail technique reste toujours loggé en console à côté.
-  // ============================================================
 
   GeoCompanion.notify = function (message, type = 'error') {
     const colors = { error: 'var(--gc-danger)', success: 'var(--gc-success)', info: 'var(--gc-accent)' };
@@ -293,13 +328,9 @@
 
   // ============================================================
   // CORE: détection des events de partie (fetch/XHR + parsing)
-  // ============================================================
   (function apiDetectionModule() {
     // --- état interne, persisté pour survivre à un rechargement de page ---
     // (le tableau "guesses" de l'API est cumulatif sur toute la partie ; sans
-    // cette persistance, un refresh en cours de partie ferait croire au script
-    // qu'un guess déjà traité avant le refresh est nouveau, et redéclencherait
-    // à tort roundStart/roundEnd pour du contenu déjà passé.)
     const STATE_KEY = 'geoCompanion_apiState';
     const savedState = GM_getValue(STATE_KEY, null);
 
@@ -312,34 +343,15 @@
     let roundEndEmittedRound = savedState?.roundEndEmittedRound ?? null;
     // Dernier objet game live challenge connu (capturé en passif dès qu'une
     // réponse HTTP a le champ rounds[].state) — utilisé comme base pour des
-    // champs annexes (map_name...) par le hook WS, qui reste la seule
-    // source des données de round/guess elles-mêmes (voir handleGameObject
-    // et le hook WebSocket plus bas).
     let lastGoodGameSnapshot = null;
     // Live challenge uniquement : les events WebSocket de début/fin de round
     // n'incluent pas le numéro de round (juste un code). Sans ce compteur
-    // dédié, on dépendait de "currentRound" — qui ne se met à jour que si
-    // une réponse HTTP avec un champ round exploitable arrive entre deux
-    // rounds. Un joueur qui ne fait plus aucune requête après avoir guessé
-    // (cas courant à plusieurs) ne déclenchait alors jamais la mise à jour,
-    // et le round-end suivant était silencieusement ignoré (comparaison à
-    // l'identique). Ce compteur avance uniquement via les events WS eux-mêmes,
-    // donc indépendamment de si HTTP a suivi ou non — best-effort, à confirmer
-    // sur le terrain.
     let liveChallengeRound = savedState?.liveChallengeRound ?? null;
     // Live challenge : notre propre guess (lat/lng/distance), capturé depuis
     // les messages WS "LiveChallengeLeaderboardUpdate" — confirmé par
-    // capture réseau réelle : liveChallenge.leaderboards.round.entries[i] et
-    // .guesses[i] se correspondent par index (même ordre), donc on retrouve
-    // notre guess en cherchant notre pseudo dans entries. Fiable pour tout
-    // le monde (host ou non), contrairement au snapshot HTTP. Clé = numéro
-    // de round, pas persisté (ré-obtenu à chaque partie).
     let wsOwnGuessByRound = {};
     // Dernier objet "game" émis pour un roundEnd donné (par numéro de round).
     // Sert uniquement à pouvoir rafraîchir l'affichage si le guess de CE
-    // joueur (voir wsOwnGuessByRound) arrive en retard — après le RoundEnded
-    // du round concerné (typiquement : joueur qui n'a pas cliqué à temps,
-    // le LeaderboardUpdate avec son guess arrive après coup). Non persisté.
     let lastEmittedRoundGameByRound = {};
 
     function persistState() {
@@ -361,10 +373,6 @@
 
     // Certaines réponses live challenge n'ont aucun champ round exploitable
     // au niveau racine (contrairement au mode classique) — on retombe alors
-    // sur game.rounds[] : le premier round dont l'état n'est pas "Ended"
-    // (donc celui en cours), sinon le dernier de la liste si tous sont
-    // terminés. Rend la détection de round moins dépendante d'un champ qui
-    // peut être absent selon le mode — best-effort, à confirmer sur le terrain.
     function deriveRoundNumber(game) {
       const topLevel = game.round ?? game.roundNumber ?? game.currentRoundNumber;
       if (typeof topLevel === 'number') return topLevel;
@@ -405,13 +413,6 @@
       const currentRoundInfo = typeof round === 'number' ? roundsInfo[round - 1] : null;
       // Le champ state existe uniquement en live challenge — sa présence
       // indique qu'on ne doit RIEN déclencher depuis HTTP pour cette réponse
-      // (round-start/round-end/fin de partie) : la détection live challenge
-      // passe désormais uniquement par le WebSocket (voir le hook WS plus
-      // bas — roundStart/roundEnd/gameEnd y sont fiables et complets, HTTP
-      // s'est révélé à la fois redondant et moins fiable pour ce mode).
-      // HTTP continue juste à alimenter lastGoodGameSnapshot en passif, en
-      // repli pour des champs annexes (map_name...) si jamais absents de
-      // liveChallenge.state.
       const isLiveChallengeResponse = currentRoundInfo?.state != null;
 
       if (isLiveChallengeResponse) {
@@ -430,7 +431,6 @@
 
       // Le reste (fin de round, fin de partie) ne concerne que les modes
       // autres que live challenge — heuristique "le nombre de guesses a
-      // augmenté", inchangée pour classique/challenge/battle royale/duels.
       if (isLiveChallengeResponse) return;
 
       const guesses = game.player?.guesses || game.guesses;
@@ -511,24 +511,6 @@
 
     // --- Hook WebSocket (live challenge uniquement) ---
     // En live challenge, GeoGuessr pousse les vrais events de round/partie
-    // via WebSocket, indépendamment des réponses HTTP — nécessaire car un
-    // joueur qui a déjà guessé et ne fait plus aucune requête HTTP ensuite
-    // ne verrait jamais la transition avec le seul hook fetch/XHR.
-    // Confirmé par capture réseau réelle : contrairement à ce qu'on pensait,
-    // le message "LiveChallengeRoundEnded" ne se limite PAS à un simple
-    // code + gameId — il porte liveChallenge.state, qui est un objet "game"
-    // complet (rounds[] avec question ET answer inclus, currentRoundNumber,
-    // hostId...), envoyé à TOUS les joueurs, pas seulement l'hôte. On
-    // l'utilise donc directement comme source de données plutôt que de
-    // repasser par lastGoodGameSnapshot (HTTP), qui s'est révélé incomplet
-    // côté non-hôte (answer.coordinateAnswerPayload absent de leurs propres
-    // réponses HTTP — cause du bug "country_code/actual_lat toujours null
-    // sauf pour l'hôte").
-    // Modèle de fonctionnement (demande explicite) :
-    //   - RoundStarting  -> masque les panneaux du round précédent
-    //   - RoundEnded     -> récupère les données (depuis le message WS
-    //                       lui-même) + affiche le résultat
-    //   - navigation vers une autre page -> masque (voir checkHomepage)
     const OriginalWebSocket = pageWindow.WebSocket;
     if (typeof OriginalWebSocket === 'function') {
       pageWindow.WebSocket = function (...args) {
@@ -551,24 +533,16 @@
             const state = data.liveChallenge?.state;
             // currentRoundNumber est présent directement sur ce message
             // (confirmé par capture réseau réelle) — plus fiable que le
-            // compteur liveChallengeRound, qui reste un repli seulement si
-            // ce champ venait à manquer.
             const endedRound = state?.currentRoundNumber ?? liveChallengeRound ?? currentRound ?? 1;
             if (roundEndEmittedRound !== endedRound) {
               // state a toujours guesses:null (confirmé par capture réseau) —
               // le guess de CE joueur ne s'y trouve pas, seulement dans le
-              // snapshot HTTP (lastGoodGameSnapshot). On fusionne : les
-              // données de round/réponse viennent de state (fiables pour
-              // tout le monde), le guess vient du snapshot HTTP en repli.
               const game = state
                 ? { ...(lastGoodGameSnapshot || {}), ...state, guesses: state.guesses ?? lastGoodGameSnapshot?.guesses ?? null }
                 : lastGoodGameSnapshot;
               if (game) {
                 // Le guess capturé via LeaderboardUpdate (wsOwnGuessByRound)
                 // est fiable pour tout le monde, host ou non — on l'utilise
-                // en priorité pour lat/lng/distance/score, tout en gardant
-                // les éventuels autres champs du guess HTTP existant s'il y
-                // en avait un.
                 const wsGuess = wsOwnGuessByRound[endedRound];
                 const finalGame = wsGuess
                   ? {
@@ -598,7 +572,6 @@
           } else if (data.code === 'FinishChallengeFinished') {
             // Le vrai code est "FinishChallengeFinished", pas
             // "LiveChallengeFinished" (confirmé par capture réseau réelle) —
-            // avec le mauvais nom, cette branche ne se déclenchait jamais.
             if (gameState !== 'finished') {
               gameState = 'finished';
               persistState();
@@ -607,8 +580,6 @@
           } else if (data.code === 'LiveChallengeLeaderboardUpdate') {
             // Repli supplémentaire pour garder liveChallengeRound à jour
             // entre deux RoundEnded (utile si un message venait à être
-            // manqué) : liveChallenge.leaderboards.roundGuessTime.roundNumber
-            // est une vraie donnée serveur, confirmée par capture réseau.
             const roundNumber = data.liveChallenge?.leaderboards?.roundGuessTime?.roundNumber;
             if (typeof roundNumber === 'number' && roundNumber !== liveChallengeRound) {
               liveChallengeRound = roundNumber;
@@ -617,10 +588,6 @@
 
             // Notre propre guess pour ce round : liveChallenge.leaderboards
             // .round.entries[i] et .guesses[i] se correspondent par index
-            // (même ordre) — confirmé par capture réseau réelle. Fiable pour
-            // tout le monde (host ou non), contrairement au guess du
-            // snapshot HTTP (absent pour les non-hôtes). On retrouve notre
-            // position via notre pseudo (identityModule).
             const roundLeaderboard = data.liveChallenge?.leaderboards?.round;
             if (
               roundLeaderboard &&
@@ -638,10 +605,6 @@
                   const hadGuessBefore = wsOwnGuessByRound[roundNum] != null;
                   // Score absent du guess pour certains joueurs même via HTTP
                   // (même souci racine que country_code/actual_lat avant) —
-                  // on tente plusieurs noms de champ plausibles, sur le guess
-                  // ET sur l'entry (le score y est peut-être plutôt qu'ici).
-                  // Log de la structure brute en plus, tant qu'on n'a pas
-                  // confirmé le bon champ par capture réseau réelle.
                   const myScore =
                     myGuess.score ??
                     myGuess.roundScoreInPoints ??
@@ -667,12 +630,6 @@
 
                   // Cas particulier : ce guess arrive APRÈS le roundEnd déjà
                   // traité pour ce round (joueur qui n'a pas cliqué à temps,
-                  // le LeaderboardUpdate avec son guess arrive en retard).
-                  // On rafraîchit l'affichage déjà rendu plutôt que de le
-                  // laisser sans guess indéfiniment. roundHistoryModule gère
-                  // lui-même l'enregistrement Supabase (uniquement si le
-                  // score est désormais connu, avec garde anti-doublon) —
-                  // pas de logique de dédoublonnage à faire ici.
                   if (!hadGuessBefore && roundEndEmittedRound === roundNum && lastEmittedRoundGameByRound[roundNum]) {
                     const previousGame = lastEmittedRoundGameByRound[roundNum];
                     const updatedGame = {
@@ -710,11 +667,6 @@
 
   // ============================================================
   // MODULE: debugLogger
-  // ------------------------------------------------------------
-  // Log simple dans la console à chaque event. Sert aussi
-  // d'exemple pour brancher un futur module (historique, tips...)
-  // sur le même bus d'events, indépendamment du core.
-  // ============================================================
   (function debugLoggerModule() {
     GeoCompanion.on('gameStart', (game) => {
       console.log('[GeoCompanion] 🟢 Début de partie', game);
@@ -743,18 +695,6 @@
 
   // ============================================================
   // MODULE: identity
-  // ------------------------------------------------------------
-  // Récupère le pseudo depuis le header de la page (affiché sur
-  // TOUTE page GeoGuessr, indépendamment du mode joué) plutôt que
-  // depuis les objets "game" — ces derniers ne sont disponibles
-  // qu'en partie, et le live challenge ne les fournit pas du tout
-  // dans un format exploitable (ambiguïté entre les 2 joueurs).
-  //
-  // Filet de sécurité : demande manuelle (popup) si le DOM ne
-  // donne jamais rien après quelques secondes.
-  //
-  // Expose GeoCompanion.getPlayerName() pour les autres modules.
-  // ============================================================
   (function identityModule() {
     const STORAGE_KEY = 'geoCompanion_playerName';
     let cachedName = GM_getValue(STORAGE_KEY, null);
@@ -762,9 +702,6 @@
 
     // Sélecteur best-effort basé sur le header actuel de GeoGuessr
     // (<span class="nick_nick__XXXXX">Pseudo</span>). Le suffixe hashé
-    // après "__" peut changer à un futur déploiement de leur site — d'où
-    // un sélecteur par préfixe de classe plutôt qu'un nom exact, plus
-    // résistant à ce genre de changement mineur.
     function detectPlayerNameFromDom() {
       const el = document.querySelector('[class*="nick_nick__"]');
       const name = el?.textContent?.trim();
@@ -799,11 +736,9 @@
 
     // Le script tourne en @run-at document-start : document.body peut ne
     // pas encore exister à ce stade. On diffère l'init si besoin plutôt
-    // que de planter sur observer.observe(document.body, ...).
     function initDetection() {
       // Tentative immédiate (au cas où le header serait déjà chargé), puis
       // surveillance du DOM : le header peut apparaître après coup
-      // (chargement différé) ou être reconstruit lors d'une navigation SPA.
       tryDetect();
       if (!cachedName) {
         observer = new MutationObserver(() => tryDetect());
@@ -838,16 +773,9 @@
 
   // ============================================================
   // CORE: supabaseClient
-  // ------------------------------------------------------------
-  // Petit wrapper autour de l'API REST Supabase (PostgREST), sans
-  // dépendance externe. Réutilisable par tous les futurs modules
-  // (historique, tips, stats...).
-  // ============================================================
   const supabaseClient = {
     // insert une ou plusieurs lignes.
     // - merge: true fait un upsert avec update sur conflit (nécessite une policy RLS UPDATE)
-    // - ignoreDuplicates: true ignore silencieusement les conflits (aucun UPDATE déclenché,
-    //   donc aucune policy RLS supplémentaire requise) — utile pour "profiles"
     async insert(table, row, { merge = false, ignoreDuplicates = false } = {}) {
       try {
         let prefer = 'return=minimal';
@@ -1011,13 +939,6 @@
 
   // ============================================================
   // CORE: reverseGeocode
-  // ------------------------------------------------------------
-  // GeoGuessr ne fournit pas le pays deviné par le joueur (seulement
-  // ses coordonnées lat/lng), donc on le déduit via Nominatim
-  // (OpenStreetMap) — gratuit, sans clé, CORS ouvert.
-  // Politique d'usage : ~1 requête/seconde max, ce qui est largement
-  // suffisant ici (un seul appel par fin de round).
-  // ============================================================
   async function reverseGeocodeCountry(lat, lng) {
     try {
       const res = await fetch(
@@ -1037,13 +958,6 @@
 
   // ============================================================
   // CORE: geoData (mapping pays -> continent)
-  // ------------------------------------------------------------
-  // Contrairement au sens de circulation ou aux slugs Plonkit, le
-  // découpage continental est un fait géographique stable — cette
-  // liste est une bonne source de vérité, pas juste une estimation.
-  // Quelques cas limites (Russie transcontinentale, territoires
-  // d'outre-mer) sont tranchés arbitrairement mais raisonnablement.
-  // ============================================================
   const CONTINENT_BY_COUNTRY = (() => {
     const map = {};
     const assign = (continent, codes) => codes.forEach((c) => (map[c] = continent));
@@ -1098,7 +1012,6 @@
 
   // Inverse de CONTINENT_BY_COUNTRY : liste de tous les codes pays connus
   // pour un continent donné (utilisé pour afficher la liste complète des
-  // pays, y compris ceux jamais joués).
   const COUNTRIES_BY_CONTINENT = (() => {
     const grouped = {};
     for (const [code, continent] of Object.entries(CONTINENT_BY_COUNTRY)) {
@@ -1110,11 +1023,6 @@
 
   // Pays ayant une couverture Google Street View connue (donc susceptibles
   // d'apparaître réellement dans une partie GeoGuessr). Best-effort, basé
-  // sur une source communautaire mise à jour mensuellement — la couverture
-  // évolue avec le temps, cette liste peut donc devenir légèrement datée.
-  // Utilisé uniquement pour filtrer les pays "jamais joués" affichés dans
-  // le dashboard (un round réellement enregistré s'affiche toujours, quelle
-  // que soit cette liste — CONTINENT_BY_COUNTRY reste complet pour ça).
   const STREETVIEW_COVERED_COUNTRIES = new Set([
     'AX', 'AL', 'AS', 'AD', 'AR', 'AU', 'AT', 'BD', 'BY', 'BE', 'BM', 'BT', 'BO', 'BA', 'BW',
     'BR', 'BG', 'KH', 'CA', 'CL', 'CN', 'CO', 'CR', 'HR', 'CW', 'CY', 'CZ', 'DK', 'DO', 'EC',
@@ -1129,27 +1037,16 @@
 
   // ============================================================
   // MODULE: roundHistory
-  // ------------------------------------------------------------
-  // À chaque fin de round, enregistre les données dans Supabase
-  // (table "rounds"). Crée aussi le profil du joueur au passage
-  // s'il n'existe pas encore (upsert silencieux).
-  //
-  // ⚠️ Les noms de champs dans extractRoundData() sont une
-  // meilleure estimation, pas une certitude — à ajuster une fois
-  // testé en conditions réelles (voir les warnings en console).
-  // ============================================================
   (function roundHistoryModule() {
     let warnedMapOnce = false;
     // Clés (game_token:round_number) déjà enregistrées dans Supabase cette
     // session — évite un doublon quand un round est réémis avec le score
-    // qu'on n'avait pas encore (late-guess-update, voir apiDetectionModule).
     const recordedRoundKeys = new Set();
     GeoCompanion.on('gameStart', () => recordedRoundKeys.clear());
 
     function extractRoundData(game) {
       // Repli identique à apiDetectionModule::deriveRoundNumber (module
       // séparé, pas de closure partagée) : certaines réponses live
-      // challenge n'ont aucun champ round exploitable à la racine.
       let round = game.round ?? game.roundNumber ?? game.currentRoundNumber;
       const roundsInfoForDerive = game.rounds;
       if (typeof round !== 'number' && Array.isArray(roundsInfoForDerive) && roundsInfoForDerive.length > 0) {
@@ -1168,13 +1065,6 @@
 
       // Live challenge : les coordonnées réelles sont imbriquées dans
       // answer.coordinateAnswerPayload.coordinate — mais ce champ "answer"
-      // ne semble disponible que pour l'hôte (qui seul appelle advance-round/
-      // end-round, dont la réponse inclut la révélation complète). Pour les
-      // autres joueurs, on retombe sur les coordonnées du panorama lui-même
-      // (question.panoramaQuestionPayload.panorama), déjà utilisées comme
-      // repli fiable pour countryCode juste en dessous — la position du
-      // panorama EST la position réelle du round, donc ce repli est valide
-      // pour tout le monde, pas seulement en dernier recours.
       const actualLat =
         roundInfo.lat ??
         roundInfo.location?.lat ??
@@ -1189,9 +1079,6 @@
       const guessLng = guess.lng ?? guess.position?.lng;
       // Pas de code pays direct en live challenge (juste des coordonnées) —
       // sera résolu par reverse-geocoding dans le handler roundEnd si besoin.
-      // Live challenge : le pays réel est fourni, mais imbriqué plus profond
-      // (rounds[].question.panoramaQuestionPayload.panorama.countryCode)
-      // plutôt qu'à plat comme en classique.
       const actualCountryRaw =
         roundInfo.streakLocationCode ??
         roundInfo.countryCode ??
@@ -1199,7 +1086,6 @@
         null;
       // Confirmé par capture réseau réelle : ce champ arrive en minuscule
       // en live challenge ("gh", "br"...) alors que le reste du script (DB,
-      // affichage, continentFromCountryCode) suppose du majuscule.
       const actualCountry = actualCountryRaw ? actualCountryRaw.toUpperCase() : null;
 
       // Live challenge : score/distance sont des valeurs directes sur le
@@ -1248,7 +1134,6 @@
 
       // Certains modes (live challenge) ne fournissent pas le code pays réel
       // directement, seulement des coordonnées — on le déduit alors par
-      // reverse-geocoding, comme on le fait déjà pour le guess plus bas.
       if (!row.country_code && row.actual_lat != null && row.actual_lng != null) {
         const actualCountry = await reverseGeocodeCountry(row.actual_lat, row.actual_lng);
         if (actualCountry) {
@@ -1259,10 +1144,6 @@
 
       // Priorité actuelle : trouver le pays et afficher tips/stats (stats
       // vierges si rien en base) sans dépendre de la suite (reverse-geocoding
-      // du guess pour le ✅/❌, enregistrement Supabase) — ces deux étapes
-      // font un appel réseau externe chacune et peuvent échouer ou traîner
-      // sans que ça doive empêcher l'affichage. On émet donc roundRecorded
-      // dès que le pays est connu, ici, plutôt qu'à la toute fin.
       GeoCompanion.emit('roundRecorded', row);
 
       // Déduction du pays deviné via reverse-geocoding des coordonnées du guess.
@@ -1277,7 +1158,6 @@
           );
           // Le panneau est déjà affiché (roundRecorded émis plus haut, avant
           // de connaître ce résultat) — on met juste à jour cette ligne
-          // précise plutôt que de réafficher tout le panneau.
           GeoCompanion.emit('roundCorrectnessResolved', row);
         }
       }
@@ -1289,12 +1169,6 @@
 
       // On n'enregistre dans Supabase QUE lorsque le score est connu : soit
       // directement ici si le joueur avait déjà guessé au moment du
-      // roundEnd, soit plus tard via le rafraîchissement _source:'ws-late-
-      // guess-update' (apiDetectionModule) une fois le guess/score arrivé en
-      // retard. Garde anti-doublon (recordedRoundKeys) : ce handler peut être
-      // rappelé plusieurs fois pour le même round (roundCorrectnessResolved
-      // n'en fait pas partie, mais une late-guess-update oui) et il n'y a pas de
-      // contrainte d'unicité game_token+round_number en base.
       const recordKey = `${row.game_token}:${row.round_number}`;
       if (row.score == null) {
         console.log('[GeoCompanion] ⏳ Score pas encore connu pour ce round — enregistrement différé.');
@@ -1312,15 +1186,6 @@
 
   // ============================================================
   // MODULE: stats
-  // ------------------------------------------------------------
-  // Agrégation des stats par pays/continent/carte, avec filtres
-  // temporels (24h / 7j / 30j / total). Les agrégats sont calculés
-  // côté base (fonctions Postgres, voir supabase-stats-functions.sql)
-  // plutôt que côté client — le volume de données transféré reste
-  // constant dans le temps, quelle que soit la taille de l'historique.
-  //
-  // Expose GeoCompanion.stats.getCountryStats(countryCode, filterKey)
-  // ============================================================
   (function statsModule() {
     // Convertit un filterKey ('24h'|'7d'|'30d'|'all') en timestamp ISO,
     // ou null pour 'all' (pas de filtre de date côté RPC).
@@ -1393,8 +1258,6 @@
 
     // Stats groupées par pays (avec leur continent) pour un joueur donné —
     // utilisé par le dashboard sur la page d'accueil. Filtré par joueur car
-    // c'est un outil de progression personnelle (voir tes propres points
-    // faibles), la comparaison entre joueurs existe déjà par ailleurs.
     async function getAllCountryStats(playerName, filterKey = 'all') {
       const rows = await supabaseClient.rpc('get_all_country_stats', {
         p_player_name: playerName,
@@ -1437,7 +1300,6 @@
 
     // Supprime les rounds d'un joueur correspondant au filtre temporel donné
     // (même logique de date que les stats — filterKey 'all' supprime tout
-    // l'historique du joueur, sans restriction de date).
     async function deleteRoundsForPlayer(playerName, filterKey = 'all') {
       const since = sinceTimestamp(filterKey);
       const query =
@@ -1458,11 +1320,6 @@
 
   // ============================================================
   // MODULE: tips
-  // ------------------------------------------------------------
-  // CRUD des tips par pays. Modifiables par tout le monde (décision
-  // produit), pas de restriction par auteur. Ce module ne fait que
-  // la donnée — l'affichage est dans uiPanel juste après.
-  // ============================================================
   (function tipsModule() {
     async function listTipsForCountry(countryCode) {
       const rows = await supabaseClient.select(
@@ -1506,15 +1363,6 @@
 
   // ============================================================
   // MODULE: countryInfo
-  // ------------------------------------------------------------
-  // Métadonnées par pays : sens de circulation, langue, plaque/
-  // bollard/poteau (photos) et voiture (texte), tous modifiables
-  // manuellement. Les valeurs de base (sens de circulation, indices
-  // de langue) sont pré-remplies directement dans Supabase via un
-  // script SQL de seed (pas de liste codée en dur ici) — voir
-  // supabase-country-info-seed.sql. Toute correction manuelle prime
-  // et n'est jamais écrasée par un futur seed (ON CONFLICT + COALESCE).
-  // ============================================================
   (function countryInfoModule() {
     // Retourne toutes les métadonnées d'un pays en une seule requête,
     // telles que stockées en base (valeurs déjà seedées ou corrigées).
@@ -1550,12 +1398,6 @@
 
   // ============================================================
   // MODULE: uiPanel
-  // ------------------------------------------------------------
-  // Encart affiché uniquement en fin de round (une fois le pays
-  // révélé). Montre le résultat du round + les stats du pays
-  // avec filtres temporels. S'appuie sur GeoCompanion.stats et sur
-  // l'event "roundRecorded" (pas de duplication de logique).
-  // ============================================================
   (function uiPanelModule() {
     const PANEL_ID = 'geo-companion-panel';
     const TIPS_PANEL_ID = 'geo-companion-tips-panel';
@@ -1608,8 +1450,6 @@
 
     // Domaine internet (ccTLD) du pays. Dans la grande majorité des cas, ça
     // correspond directement au code ISO en minuscule — quelques exceptions
-    // connues sont listées ci-dessous (liste non exhaustive, à compléter si
-    // un cas manquant est repéré).
     const TLD_OVERRIDES = {
       GB: 'uk', // le Royaume-Uni utilise .uk et non .gb
     };
@@ -1622,22 +1462,17 @@
 
     // Convertit un code pays ISO 2 lettres en <img> de drapeau via flagcdn.com
     // (gratuit, pas de clé). On utilisait un emoji drapeau Unicode avant,
-    // mais Chrome/Windows ne les rend pas du tout (juste les 2 lettres du
-    // code ISO côte à côte) — une image est fiable sur toutes plateformes.
-    function flagImgFromCode(code, { height = '1em', style = '' } = {}) {
+    function flagImgFromCode(code, { height = '1em', className = '' } = {}) {
       if (!code || code.length !== 2) return '';
       const lower = code.toLowerCase();
-      return `<img src="https://flagcdn.com/${lower}.svg" alt="${code.toUpperCase()}" style="height:${height}; width:auto; vertical-align:middle; display:inline-block; border-radius:2px; ${style}" onerror="this.style.visibility='hidden'">`;
+      return `<img src="https://flagcdn.com/${lower}.svg" alt="${code.toUpperCase()}" class="gc-flag-img ${className}" style="height:${height};" onerror="this.style.visibility='hidden'">`;
     }
 
     // Déduit l'URL de la page pays sur plonkit.net à partir du nom anglais
     // (ex: "United States" -> "united-states"). Best-effort : plonkit ne suit
-    // pas toujours exactement les noms ISO, donc quelques pays peuvent tomber
-    // sur une mauvaise URL — à corriger au cas par cas si repéré.
     const PLONKIT_SLUG_OVERRIDES = {
       // code ISO (majuscule) -> slug plonkit, pour les cas où la conversion
       // automatique du nom anglais ne matche pas l'URL réelle.
-      // Exemple : KR: 'south-korea',
     };
 
     function plonkitUrlFromCode(code) {
@@ -1666,15 +1501,7 @@
       if (!panel) {
         panel = document.createElement('div');
         panel.id = PANEL_ID;
-        panel.className = 'gc-panel';
-        panel.style.cssText = `
-          top: 20px;
-          right: 20px;
-          width: clamp(300px, 18.75vw, 480px);
-          max-height: 80vh;
-          overflow-y: auto;
-          font-size: 20px;
-        `;
+        panel.className = 'gc-panel gc-result-panel';
         document.body.appendChild(panel);
       }
       return panel;
@@ -1685,21 +1512,11 @@
       if (!panel) {
         panel = document.createElement('div');
         panel.id = TIPS_PANEL_ID;
-        panel.className = 'gc-panel';
-        panel.style.cssText = `
-          top: 20px;
-          left: 20px;
-          width: clamp(300px, 18.75vw, 480px);
-          height: auto;
-          max-height: 85vh;
-          padding: 14px;
-          font-size: 19px;
-        `;
+        panel.className = 'gc-panel gc-tips-panel';
         document.body.appendChild(panel);
 
         // Listener délégué unique (le panneau persiste entre les re-renders) :
         // clique sur n'importe quelle image marquée data-lightbox pour la
-        // voir en taille réelle.
         panel.addEventListener('click', (e) => {
           const img = e.target.closest('img[data-lightbox]');
           if (img) openImageLightbox(img.src);
@@ -1710,12 +1527,12 @@
 
     function renderRoundResult(panel, row) {
       panel.innerHTML = `
-        <div style="display:flex; align-items:center; gap:16px; margin-bottom:12px;">
-          <div style="flex-shrink:0;">
-            ${flagImgFromCode(row.country_code, { height: '10vh', style: 'box-shadow:0 2px 10px rgba(0,0,0,0.4);' })}
+        <div class="gc-round-header">
+          <div class="gc-shrink-0">
+            ${flagImgFromCode(row.country_code, { height: '10vh', className: 'gc-flag-img--round' })}
           </div>
-          <div style="flex:1; min-width:0;">
-            <div class="gc-title" style="margin-bottom:8px;">
+          <div class="gc-round-info">
+            <div class="gc-title gc-mb-8">
               ${row.country_code ? countryNameFromCode(row.country_code) : 'Pays inconnu'}
               ${
                 row.country_code && tldFromCode(row.country_code)
@@ -1731,8 +1548,8 @@
           </div>
         </div>
         <hr class="gc-hr">
-        <button id="geo-companion-toggle-stats-btn" class="gc-btn gc-btn--secondary gc-btn--block" style="padding:8px; font-size:14px;">📊 Voir les stats</button>
-        <div id="geo-companion-stats-section" style="display:none; margin-top:10px;">
+        <button id="geo-companion-toggle-stats-btn" class="gc-btn gc-btn--secondary gc-btn--block gc-btn--stats-toggle">📊 Voir les stats</button>
+        <div id="geo-companion-stats-section" class="gc-stats-section gc-collapsed">
           <div id="geo-companion-stats">Chargement des statistiques…</div>
           <hr class="gc-hr">
           <div id="geo-companion-continent-stats"></div>
@@ -1762,7 +1579,7 @@
       if (!container) return;
 
       container.innerHTML = `
-        <div class="gc-btn-row" style="margin-bottom:10px;">
+        <div class="gc-btn-row gc-mb-10">
           ${FILTERS.map(
             (f) => `
             <button data-filter="${f.key}" class="gc-btn gc-btn--flex gc-btn--lg ${
@@ -1780,7 +1597,6 @@
 
       // Cache par filtre temporel : changer de filtre puis revenir dessus ne
       // refait pas d'appel réseau. Le cache est propre à ce round affiché
-      // (créé à chaque nouvel affichage), donc toujours à jour.
       let stats;
       if (cache.has(activeFilter)) {
         stats = cache.get(activeFilter);
@@ -1835,7 +1651,7 @@
       if (!comparison || comparison.length === 0) {
         container.innerHTML = `
           <div class="gc-subtitle">👥 Comparaison</div>
-          <div class="gc-muted" style="font-size:14px;">Aucune donnée pour cette période.</div>
+          <div class="gc-muted gc-fs-14">Aucune donnée pour cette période.</div>
         `;
         return;
       }
@@ -1844,10 +1660,9 @@
       const rowsHtml = comparison
         .map(
           (p) => `
-        <div class="gc-card-header" style="padding:6px 8px; border-radius:6px; margin-bottom:2px;
-          background:${p.player === me ? 'var(--gc-bg-secondary-hover)' : 'transparent'};">
-          <span style="font-weight:${p.player === me ? '700' : '400'};">${escapeHtml(p.player)}</span>
-          <span style="font-size:13px; opacity:0.85;">
+        <div class="gc-card-header gc-comparison-row ${p.player === me ? 'gc-comparison-row--me' : ''}">
+          <span class="gc-comparison-name ${p.player === me ? 'gc-comparison-name--me' : ''}">${escapeHtml(p.player)}</span>
+          <span class="gc-comparison-stats">
             ${p.count} rounds · ${p.avgScore ?? '-'} pts moy. · ${p.successRate != null ? p.successRate + '%' : '-'}
           </span>
         </div>
@@ -1870,12 +1685,8 @@
     // Affiche une image en grand par-dessus tout le reste (clic pour fermer).
     function openImageLightbox(url) {
       const overlay = document.createElement('div');
-      overlay.style.cssText = `
-        position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85);
-        display: flex; align-items: center; justify-content: center;
-        z-index: 9999999; cursor: zoom-out;
-      `;
-      overlay.innerHTML = `<img src="${url}" style="max-width:90vw; max-height:90vh; border-radius:8px; box-shadow:0 8px 40px rgba(0,0,0,0.6);">`;
+      overlay.className = 'gc-lightbox-overlay';
+      overlay.innerHTML = `<img src="${url}" class="gc-lightbox-img">`;
       overlay.addEventListener('click', () => overlay.remove());
       document.body.appendChild(overlay);
     }
@@ -1887,17 +1698,17 @@
       `;
 
       return `
-        <div class="gc-card" style="border-radius:8px; font-size:16px;">
-          ${tip.content ? `<div style="margin-bottom:4px; white-space:pre-wrap; font-size:18px;">${escapeHtml(tip.content)}</div>` : ''}
+        <div class="gc-card gc-tip-card">
+          ${tip.content ? `<div class="gc-tip-content">${escapeHtml(tip.content)}</div>` : ''}
           ${
             tip.image_url
               ? `
                 <div class="gc-relative gc-mb-2">
-                  <img data-lightbox="true" src="${tip.image_url}" class="gc-img" style="width:100%; max-height:300px; object-fit:contain;">
+                  <img data-lightbox="true" src="${tip.image_url}" class="gc-img gc-tip-image">
                   <div class="gc-img-overlay-actions">${buttonsHtml}</div>
                 </div>
               `
-              : `<div style="display:flex; justify-content:flex-end; gap:8px;">${buttonsHtml}</div>`
+              : `<div class="gc-flex-end-gap-8">${buttonsHtml}</div>`
           }
         </div>
       `;
@@ -1908,16 +1719,16 @@
       if (!formContainer) return;
 
       formContainer.innerHTML = `
-        <div class="gc-card" style="margin-top:6px; border-radius:8px;">
-          <textarea id="geo-companion-tip-text" placeholder="Texte du tip (optionnel)" class="gc-input gc-input--compact" style="min-height:50px;">${
+        <div class="gc-card gc-tip-form-card">
+          <textarea id="geo-companion-tip-text" placeholder="Texte du tip (optionnel)" class="gc-input gc-input--compact gc-textarea-sm">${
             tip ? escapeHtml(tip.content || '') : ''
           }</textarea>
           <input id="geo-companion-tip-image" type="text" placeholder="URL d'image (optionnel)" value="${
             tip ? tip.image_url || '' : ''
           }" class="gc-input gc-input--compact">
-          <div class="gc-btn-row" style="margin-top:6px;">
-            <button id="geo-companion-tip-save" class="gc-btn gc-btn--flex gc-btn--primary" style="padding:6px; font-size:13px;">Enregistrer</button>
-            <button id="geo-companion-tip-cancel" class="gc-btn gc-btn--flex gc-btn--secondary" style="padding:6px; font-size:13px;">Annuler</button>
+          <div class="gc-btn-row gc-mt-6">
+            <button id="geo-companion-tip-save" class="gc-btn gc-btn--flex gc-btn--primary gc-btn--form-lg">Enregistrer</button>
+            <button id="geo-companion-tip-cancel" class="gc-btn gc-btn--flex gc-btn--secondary gc-btn--form-lg">Annuler</button>
           </div>
         </div>
       `;
@@ -1959,29 +1770,29 @@
           <div class="gc-title">
             💡 Tips ${
               plonkitUrl
-                ? `<a href="${plonkitUrl}" target="_blank" rel="noopener noreferrer" class="gc-link" style="font-size:17px;">🔗 Plonkit</a>`
+                ? `<a href="${plonkitUrl}" target="_blank" rel="noopener noreferrer" class="gc-link gc-fs-17">🔗 Plonkit</a>`
                 : ''
             }
           </div>
-          <div style="display:flex; gap:6px;">
-            <button id="geo-companion-tips-refresh-btn" title="Actualiser les tips" class="gc-btn gc-btn--icon gc-btn--icon-accent" style="font-size:16px;">🔄</button>
-            <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--icon gc-btn--icon-accent" style="font-size:18px;">▼</button>
+          <div class="gc-flex-gap-6">
+            <button id="geo-companion-tips-refresh-btn" title="Actualiser les tips" class="gc-btn gc-btn--icon gc-btn--icon-accent gc-fs-16">🔄</button>
+            <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--icon gc-btn--icon-accent gc-fs-18">▼</button>
           </div>
         </div>
-        <div id="geo-companion-tips-body" style="display:flex; flex-direction:column; min-height:0; flex:1;">
+        <div id="geo-companion-tips-body" class="gc-flex-col-fill">
           <div id="geo-companion-country-fields" class="gc-mb-6 gc-shrink-0"></div>
           <div id="geo-companion-voiture-route-fields" class="gc-grid-2 gc-mb-10 gc-shrink-0">
             <div id="geo-companion-voiture-field"></div>
             <div id="geo-companion-route-field"></div>
           </div>
-          <div id="geo-companion-tips-list" style="flex:1; overflow-y:auto; min-height:0;">
+          <div id="geo-companion-tips-list" class="gc-scroll-fill">
             ${
               tips.length === 0
-                ? `<div class="gc-muted" style="font-size:16px;">Aucun tip pour ce pays pour l'instant.</div>`
+                ? `<div class="gc-muted gc-fs-16">Aucun tip pour ce pays pour l'instant.</div>`
                 : `<div class="gc-grid-2">${tips.map(tipHtml).join('')}</div>`
             }
           </div>
-          <button id="geo-companion-add-tip-btn" class="gc-btn gc-btn--secondary gc-btn--block gc-mt-6 gc-shrink-0" style="padding:7px; font-size:16px;">+ Ajouter un tip</button>
+          <button id="geo-companion-add-tip-btn" class="gc-btn gc-btn--secondary gc-btn--block gc-mt-6 gc-shrink-0 gc-add-tip-btn">+ Ajouter un tip</button>
           <div id="geo-companion-tip-form" class="gc-shrink-0"></div>
         </div>
       `;
@@ -1993,9 +1804,8 @@
       const collapseBtn = tipsPanel.querySelector('#geo-companion-tips-collapse-btn');
       const tipsBody = tipsPanel.querySelector('#geo-companion-tips-body');
       collapseBtn.addEventListener('click', () => {
-        const isHidden = tipsBody.style.display === 'none';
-        tipsBody.style.display = isHidden ? 'flex' : 'none';
-        collapseBtn.textContent = isHidden ? '▼' : '▶';
+        const nowCollapsed = tipsBody.classList.toggle('gc-collapsed');
+        collapseBtn.textContent = nowCollapsed ? '▶' : '▼';
       });
 
       const refreshBtn = tipsPanel.querySelector('#geo-companion-tips-refresh-btn');
@@ -2038,19 +1848,19 @@
       const hasContent = info.route_text || info.route_image_url;
 
       container.innerHTML = `
-        <div class="gc-card" style="height:100%; box-sizing:border-box;">
+        <div class="gc-card gc-h-full-border">
           <div class="gc-card-header">
             <span class="gc-label">Route 🚗 ${drivingSideLabel(info.driving_side)}</span>
             <button data-edit-route class="gc-btn gc-btn--icon gc-btn--icon-accent" title="Modifier">✏️</button>
           </div>
-          <div data-route-display style="margin-top:2px;">
+          <div data-route-display class="gc-mt-2">
             ${
               hasContent
                 ? `
               ${info.route_text ? `<div>${escapeHtml(info.route_text)}</div>` : ''}
               ${
                 info.route_image_url
-                  ? `<img data-lightbox="true" src="${info.route_image_url}" class="gc-img" style="max-height:98px; max-width:100%; display:block; margin-top:4px;">`
+                  ? `<img data-lightbox="true" src="${info.route_image_url}" class="gc-img gc-route-img">`
                   : ''
               }
             `
@@ -2070,17 +1880,17 @@
           <input type="text" data-route-image value="${escapeHtml(
             info.route_image_url || ''
           )}" placeholder="URL de l'image (optionnel)" class="gc-input gc-input--compact">
-          <div class="gc-btn-row" style="margin-top:6px;">
-            <button data-route-side="left" class="gc-btn gc-btn--flex" style="padding:4px; font-size:11px; background:${
-              info.driving_side === 'left' ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'
-            };">⬅️ Gauche</button>
-            <button data-route-side="right" class="gc-btn gc-btn--flex" style="padding:4px; font-size:11px; background:${
-              info.driving_side === 'right' ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)'
-            };">➡️ Droite</button>
+          <div class="gc-btn-row gc-mt-6">
+            <button data-route-side="left" class="gc-btn gc-btn--flex gc-driving-btn ${
+              info.driving_side === 'left' ? 'gc-driving-btn--active' : ''
+            }">⬅️ Gauche</button>
+            <button data-route-side="right" class="gc-btn gc-btn--flex gc-driving-btn ${
+              info.driving_side === 'right' ? 'gc-driving-btn--active' : ''
+            }">➡️ Droite</button>
           </div>
-          <div class="gc-btn-row" style="margin-top:6px;">
-            <button data-save-route class="gc-btn gc-btn--flex gc-btn--primary" style="padding:4px; font-size:13px;">OK</button>
-            <button data-cancel-route class="gc-btn gc-btn--flex gc-btn--secondary" style="padding:4px; font-size:13px;">Annuler</button>
+          <div class="gc-btn-row gc-mt-6">
+            <button data-save-route class="gc-btn gc-btn--flex gc-btn--primary gc-btn--form">OK</button>
+            <button data-cancel-route class="gc-btn gc-btn--flex gc-btn--secondary gc-btn--form">Annuler</button>
           </div>
         `;
 
@@ -2094,7 +1904,7 @@
           btn.addEventListener('click', () => {
             selectedSide = btn.dataset.routeSide;
             formEl.querySelectorAll('[data-route-side]').forEach((b) => {
-              b.style.background = b.dataset.routeSide === selectedSide ? 'var(--gc-accent-gradient)' : 'var(--gc-bg-secondary-hover)';
+              b.classList.toggle('gc-driving-btn--active', b.dataset.routeSide === selectedSide);
             });
           });
         });
@@ -2117,7 +1927,6 @@
 
     // Champs d'identification par pays : plaque/bollard/poteau (photos) et
     // langue (texte). "Voiture" a son propre rendu composite juste en
-    // dessous (texte + image + case "exclusif au pays").
     const COUNTRY_INFO_FIELDS = [
       { key: 'plaque_image_url', label: 'Plaque', type: 'image' },
       { key: 'bollard_image_url', label: 'Bollard', type: 'image' },
@@ -2130,7 +1939,7 @@
         return `<span class="gc-muted-light">Non renseigné</span>`;
       }
       if (fieldConfig.type === 'image') {
-        return `<img data-lightbox="true" src="${value}" class="gc-img" style="max-height:98px; max-width:100%; margin-top:2px;">`;
+        return `<img data-lightbox="true" src="${value}" class="gc-img gc-field-img">`;
       }
       if (fieldConfig.type === 'images') {
         const urls = value
@@ -2139,23 +1948,19 @@
           .filter(Boolean);
         if (urls.length === 0) return `<span class="gc-muted-light">Non renseigné</span>`;
         return `
-          <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:2px;">
+          <div class="gc-poteau-grid">
             ${urls
-              .map((u) => `<img data-lightbox="true" src="${u}" class="gc-img" style="height:98px; width:auto; max-width:100%;">`)
+              .map((u) => `<img data-lightbox="true" src="${u}" class="gc-img gc-poteau-img">`)
               .join('')}
           </div>
         `;
       }
+      const highlightClass = fieldConfig.key === 'langue_text' ? 'gc-field-highlight' : '';
       if (fieldConfig.type === 'multitext') {
         // white-space:pre-line préserve les retours à la ligne saisis (une
-        // langue par ligne par ex.) sans casser le rendu si le texte est long.
-        return `<span style="white-space:pre-line; ${
-          fieldConfig.key === 'langue_text' ? 'font-weight:bold; font-size:22px;' : ''
-        }">${escapeHtml(value)}</span>`;
+        return `<span class="gc-pre-line ${highlightClass}">${escapeHtml(value)}</span>`;
       }
-      return `<span style="${
-        fieldConfig.key === 'langue_text' ? 'font-weight:bold; font-size:22px;' : ''
-      }">${escapeHtml(value)}</span>`;
+      return `<span class="${highlightClass}">${escapeHtml(value)}</span>`;
     }
 
     function renderCountryInfoFields(tipsPanel, row, info) {
@@ -2171,7 +1976,7 @@
                 <span class="gc-label">${f.label}</span>
                 <button data-edit-field="${f.key}" class="gc-btn gc-btn--icon gc-btn--icon-accent" title="Modifier">✏️</button>
               </div>
-              <div data-field-display="${f.key}" style="margin-top:2px;">${countryInfoFieldDisplay(
+              <div data-field-display="${f.key}" class="gc-mt-2">${countryInfoFieldDisplay(
                 f,
                 info[f.key]
               )}</div>
@@ -2193,9 +1998,9 @@
           const isTextarea = isMultiUrl || isFreeText;
 
           const actionsHtml = `
-            <div class="gc-btn-row" style="margin-top:4px;">
-              <button data-save-field class="gc-btn gc-btn--flex gc-btn--primary" style="padding:4px; font-size:13px;">OK</button>
-              <button data-cancel-field class="gc-btn gc-btn--flex gc-btn--secondary" style="padding:4px; font-size:13px;">Annuler</button>
+            <div class="gc-btn-row gc-mt-4">
+              <button data-save-field class="gc-btn gc-btn--flex gc-btn--primary gc-btn--form">OK</button>
+              <button data-cancel-field class="gc-btn gc-btn--flex gc-btn--secondary gc-btn--form">Annuler</button>
             </div>
           `;
 
@@ -2203,7 +2008,7 @@
             ? `
               <textarea placeholder="${
                 isMultiUrl ? "Une URL d'image par ligne" : 'Une ligne par langue'
-              }" class="gc-input gc-input--compact" style="min-height:60px;">${escapeHtml(
+              }" class="gc-input gc-input--compact gc-textarea-md">${escapeHtml(
                 currentValue
               )}</textarea>
               ${actionsHtml}
@@ -2249,9 +2054,9 @@
       const hasContent = info.voiture_text || info.voiture_image_url;
       const exclusiveBadge =
         info.voiture_exclusive === true
-          ? '<span style="opacity:0.8;">🔒 Exclusif au pays</span>'
+          ? '<span class="gc-opacity-8">🔒 Exclusif au pays</span>'
           : info.voiture_exclusive === false
-          ? '<span style="opacity:0.5;">🌍 Non exclusif</span>'
+          ? '<span class="gc-opacity-5">🌍 Non exclusif</span>'
           : '';
 
       container.innerHTML = `
@@ -2260,17 +2065,17 @@
             <span class="gc-label">Voiture</span>
             <button data-edit-voiture class="gc-btn gc-btn--icon gc-btn--icon-accent" title="Modifier">✏️</button>
           </div>
-          <div data-voiture-display style="margin-top:2px;">
+          <div data-voiture-display class="gc-mt-2">
             ${
               hasContent
                 ? `
               ${info.voiture_text ? `<div>${escapeHtml(info.voiture_text)}</div>` : ''}
               ${
                 info.voiture_image_url
-                  ? `<img data-lightbox="true" src="${info.voiture_image_url}" class="gc-img" style="max-height:98px; max-width:100%; margin-top:4px;">`
+                  ? `<img data-lightbox="true" src="${info.voiture_image_url}" class="gc-img gc-voiture-img">`
                   : ''
               }
-              ${exclusiveBadge ? `<div style="margin-top:4px; font-size:13px;">${exclusiveBadge}</div>` : ''}
+              ${exclusiveBadge ? `<div class="gc-mt-4-fs-13">${exclusiveBadge}</div>` : ''}
             `
                 : '<span class="gc-muted-light">Non renseigné</span>'
             }
@@ -2288,13 +2093,13 @@
           <input type="text" data-voiture-image value="${escapeHtml(
             info.voiture_image_url || ''
           )}" placeholder="URL de l'image (optionnel)" class="gc-input gc-input--compact">
-          <label style="display:flex; align-items:center; gap:6px; margin-top:6px; font-size:13px; cursor:pointer;">
+          <label class="gc-checkbox-label">
             <input type="checkbox" data-voiture-exclusive ${info.voiture_exclusive ? 'checked' : ''}>
             Exclusif au pays
           </label>
-          <div class="gc-btn-row" style="margin-top:6px;">
-            <button data-save-voiture class="gc-btn gc-btn--flex gc-btn--primary" style="padding:4px; font-size:13px;">OK</button>
-            <button data-cancel-voiture class="gc-btn gc-btn--flex gc-btn--secondary" style="padding:4px; font-size:13px;">Annuler</button>
+          <div class="gc-btn-row gc-mt-6">
+            <button data-save-voiture class="gc-btn gc-btn--flex gc-btn--primary gc-btn--form">OK</button>
+            <button data-cancel-voiture class="gc-btn gc-btn--flex gc-btn--secondary gc-btn--form">Annuler</button>
           </div>
         `;
 
@@ -2322,8 +2127,6 @@
 
     // Affiche le résultat d'un round (panneau principal + tips + bouton
     // stats) — factorisé pour être réutilisable à la fois depuis l'event
-    // roundRecorded normal ET depuis la restauration après un rechargement
-    // de page (voir plus bas).
     async function displayRoundResult(row) {
       const panel = ensurePanel();
       renderRoundResult(panel, row);
@@ -2331,23 +2134,22 @@
 
       // Les stats ne sont chargées (et donc aucune requête Supabase envoyée)
       // que si l'utilisateur clique explicitement sur le bouton — évite une
-      // requête systématique à chaque round si on ne regarde pas les stats.
       const statsCache = new Map(); // propre à cet affichage de round
       const toggleBtn = document.getElementById('geo-companion-toggle-stats-btn');
       const statsSection = document.getElementById('geo-companion-stats-section');
       if (toggleBtn && statsSection) {
         let loaded = false;
         toggleBtn.addEventListener('click', async () => {
-          const isHidden = statsSection.style.display === 'none';
+          const isHidden = statsSection.classList.contains('gc-collapsed');
           if (isHidden) {
-            statsSection.style.display = 'block';
+            statsSection.classList.remove('gc-collapsed');
             toggleBtn.textContent = '📊 Masquer les stats';
             if (!loaded) {
               loaded = true;
               await renderStats(row, 'all', statsCache);
             }
           } else {
-            statsSection.style.display = 'none';
+            statsSection.classList.add('gc-collapsed');
             toggleBtn.textContent = '📊 Voir les stats';
           }
         });
@@ -2356,9 +2158,6 @@
 
     // Persiste quel round est actuellement affiché (ou "aucun"), pour
     // pouvoir restaurer l'affichage si la page est rechargée entre la fin
-    // d'un round (pays révélé) et le début du suivant — sans avoir besoin
-    // d'attendre un nouvel event réseau, qui pourrait ne jamais arriver
-    // (ex: on ne fait plus aucune requête après avoir vu le résultat).
     const LAST_DISPLAY_KEY = 'geoCompanion_lastRoundDisplay';
 
     GeoCompanion.on('gameStart', () => {
@@ -2376,18 +2175,12 @@
       } catch (e) {
         // GeoCompanion.emit ne rattrape que les erreurs SYNCHRONES de ses
         // listeners — un throw dans un listener async (comme celui-ci)
-        // devient un rejet de promesse non intercepté, invisible en pratique
-        // (juste un "Uncaught (in promise)" générique du navigateur). D'où
-        // ce try/catch explicite, pour avoir un log exploitable si
-        // displayRoundResult() échoue silencieusement (cas suspecté : round
-        // bien enregistré en base mais aucun panneau affiché).
         console.error('[GeoCompanion] Erreur lors de l\'affichage du résultat du round :', e, row);
       }
     });
 
     // Le pays deviné (✅/❌) est résolu après coup, une fois le panneau déjà
     // affiché (voir roundHistoryModule) — on patch juste cette ligne plutôt
-    // que de tout réafficher.
     GeoCompanion.on('roundCorrectnessResolved', (row) => {
       const line = document.getElementById('geo-companion-result-line');
       if (!line) return; // panneau plus affiché (round suivant déjà démarré) : rien à mettre à jour
@@ -2397,10 +2190,6 @@
 
     // Retire les panneaux résultat/tips et oublie l'affichage persisté.
     // Exposé sur GeoCompanion pour être réutilisable depuis d'autres modules
-    // (ex: le dashboard, qui les masque aussi au retour sur l'accueil — voir
-    // plus bas : en live challenge, la détection roundStart/gameEnd peut
-    // être en retard ou manquée, laissant ces panneaux affichés à tort une
-    // fois la partie terminée).
     GeoCompanion.hideResultAndTipsPanels = function () {
       const panel = document.getElementById(PANEL_ID);
       if (panel) panel.remove();
@@ -2411,22 +2200,15 @@
 
     // Les panneaux résultat/tips n'ont d'intérêt qu'une fois le round terminé
     // (pays révélé) — on les retire au début du round suivant pour ne pas
-    // laisser les infos de l'ancien round affichées pendant qu'on joue.
     GeoCompanion.on('roundStart', () => {
       GeoCompanion.hideResultAndTipsPanels();
     });
 
     // Pas de masquage sur gameEnd ici : cet event se déclenche en pratique
     // au moment où le DERNIER round se termine (quasi simultané avec son
-    // roundEnd), pas quand le joueur a fini de regarder l'écran de résultats/
-    // leaderboard final — masquer dessus retirait donc le panneau bien avant
-    // la vraie fin de la partie côté joueur. Le nettoyage a lieu au retour
-    // sur l'accueil à la place (voir checkHomepage plus bas), qui correspond
-    // au moment où le joueur a réellement quitté la partie.
 
     // Restauration au chargement du script : si la page est rechargée juste
     // après la fin d'un round (avant le round suivant), on réaffiche
-    // immédiatement à partir des données déjà connues, sans attendre.
     const lastDisplay = GM_getValue(LAST_DISPLAY_KEY, null);
     if (lastDisplay?.visible && lastDisplay.row) {
       displayRoundResult(lastDisplay.row);
@@ -2434,12 +2216,6 @@
 
     // ==========================================================
     // DASHBOARD (page d'accueil)
-    // ----------------------------------------------------------
-    // Récap perso par continent/pays, affiché uniquement sur la
-    // page d'accueil GeoGuessr (pas pendant une partie). GeoGuessr
-    // étant une SPA, on détecte les changements de route sans
-    // rechargement de page via un hook sur history.pushState.
-    // ==========================================================
     const DASHBOARD_ID = 'geo-companion-dashboard';
     const CONTINENT_ORDER = ['europe', 'asia', 'africa', 'north_america', 'south_america', 'oceania'];
     let dashboardActiveContinent = null; // aucun continent sélectionné par défaut = tous les pays
@@ -2448,8 +2224,6 @@
 
     // Cache en mémoire des stats par filtre temporel : changer d'onglet
     // continent ne change pas la requête sous-jacente (déjà tout récupéré
-    // pour ce filtre), donc pas besoin de retaper le réseau à chaque clic.
-    // Invalidé dès qu'un round est enregistré ou supprimé.
     const dashboardStatsCache = new Map();
 
     function isHomepage() {
@@ -2459,9 +2233,6 @@
 
     // URL qui correspond à une partie en cours (classique, challenge, live
     // challenge, battle royale, duels...), écran de résultats/leaderboard
-    // inclus (reste sous ce même chemin, avec le même token). Sert à savoir
-    // qu'on a bien QUITTÉ une partie, indépendamment de la destination
-    // (accueil ou ailleurs) — voir checkHomepage.
     function isGameplayUrl(pathname) {
       return /\/(game|live-challenge|challenge|battle-royale|duels)\//i.test(pathname);
     }
@@ -2475,14 +2246,12 @@
 
     // Widget natif GeoGuessr juste en dessous duquel le dashboard doit se
     // positionner : même largeur, écart vertical toujours identique entre
-    // le bas du dashboard et le haut de ce widget (voir positionDashboard).
     const DASHBOARD_REFERENCE_WIDGET_SELECTOR = '.widget_root__KcxU_';
     const DASHBOARD_TOP = 70; // position fixe du haut du dashboard
     const DASHBOARD_WIDGET_GAP_REM = 1; // écart à maintenir avec le widget
 
     // Convertit un nombre de rem en px selon la taille de police racine
     // actuelle (mesurée à chaque appel plutôt que figée, au cas où elle
-    // changerait — coût négligeable).
     function remToPx(rem) {
       const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       return rem * rootFontSize;
@@ -2490,9 +2259,6 @@
 
     // Aligne le dashboard sur le widget de référence (même largeur/position
     // horizontale) et ajuste sa hauteur pour que l'écart avec ce widget
-    // reste constant, quelle que soit la position de celui-ci (résolution,
-    // contenu de la page...). Rappelé au rendu et sur resize/reflow — voir
-    // les observers plus bas.
     function positionDashboard(panel) {
       const widget = document.querySelector(DASHBOARD_REFERENCE_WIDGET_SELECTOR);
       if (!widget) return; // widget introuvable (page différente, sélecteur changé...) : on garde le CSS par défaut
@@ -2504,13 +2270,11 @@
       const availableHeight = rect.top - remToPx(DASHBOARD_WIDGET_GAP_REM) - DASHBOARD_TOP;
       // La liste de pays scrolle déjà en interne (#geo-companion-dashboard-list,
       // overflow-y:auto) si jamais l'espace disponible devient trop petit —
-      // on évite juste ici une hauteur négative/absurde.
       panel.style.maxHeight = `${Math.max(availableHeight, 60)}px`;
     }
 
     // Repositionne dès que possible après un changement de layout : resize
     // fenêtre, et ResizeObserver sur le widget lui-même pour les cas où sa
-    // position bouge sans resize de la fenêtre (contenu de page qui change).
     let dashboardWidgetResizeObserver = null;
     function watchDashboardReferenceWidget() {
       const panel = document.getElementById(DASHBOARD_ID);
@@ -2538,15 +2302,7 @@
       if (!panel) {
         panel = document.createElement('div');
         panel.id = DASHBOARD_ID;
-        panel.className = 'gc-panel gc-panel--outlined';
-        panel.style.cssText = `
-          top: 70px;
-          right: 304px;
-          width: clamp(340px, 21vw, 536px);
-          max-height: 61vh;
-          padding: 12px;
-          font-size: clamp(11px, 0.95vw, 14px);
-        `;
+        panel.className = 'gc-panel gc-panel--outlined gc-dashboard-panel';
         document.body.appendChild(panel);
       }
       watchDashboardReferenceWidget();
@@ -2555,7 +2311,6 @@
 
     // Couleur pleine (bordure) et lavée (fond) selon le taux de réussite :
     // interpolation entre leur vrai rouge et leur vrai vert (design system
-    // GeoGuessr), plutôt qu'un dégradé HSL générique.
     function hexToRgb(hex) {
       const n = parseInt(hex.replace('#', ''), 16);
       return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
@@ -2574,7 +2329,6 @@
 
     // Construit et affiche la liste des pays à partir de stats déjà chargées
     // (aucune requête réseau ici — c'est le rôle de renderDashboard/du bouton
-    // Actualiser).
     function renderDashboardCountryList(allStats) {
       const listEl = document.getElementById('geo-companion-dashboard-list');
       if (!listEl) return;
@@ -2594,8 +2348,6 @@
         }))
         // un pays jamais joué n'a d'intérêt à afficher que s'il a une
         // couverture Street View connue (sinon il n'apparaîtra jamais en
-        // jeu) — un pays réellement joué s'affiche toujours, les données
-        // réelles priment sur cette liste best-effort.
         .filter((c) => c.count > 0 || STREETVIEW_COVERED_COUNTRIES.has(c.code))
         .sort((a, b) => {
           // pays joués d'abord (triés par taux de réussite décroissant), puis
@@ -2607,7 +2359,7 @@
         });
 
       if (countries.length === 0) {
-        listEl.innerHTML = `<div class="gc-muted" style="font-size:14px;">${
+        listEl.innerHTML = `<div class="gc-muted gc-fs-14">${
           dashboardActiveContinent ? 'Aucun pays connu sur ce continent.' : 'Aucun pays connu.'
         }</div>`;
         return;
@@ -2619,16 +2371,12 @@
             .map((c) => {
               const color = successColor(c.successRate);
               return `
-              <div style="
-                display:flex; justify-content:space-between; align-items:center; gap:6px;
-                padding:2px 10px; border-radius:10px; overflow:hidden;
-                background:${color.wash}; border-left:4px solid ${color.solid};
-              ">
-                <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${flagImgFromCode(c.code, {
+              <div class="gc-country-row" style="background:${color.wash}; border-left-color:${color.solid};">
+                <span class="gc-nowrap-ellipsis">${flagImgFromCode(c.code, {
                   height: '0.9em',
-                  style: 'margin-right:4px;',
+                  className: 'gc-flag-img--list',
                 })}${shortCountryName(c.code)}</span>
-                <span style="font-size:12px; opacity:0.9; white-space:nowrap; flex-shrink:0;">
+                <span class="gc-country-stats">
                   ${c.count > 0 ? `${c.count} · ${c.successRate != null ? c.successRate + '%' : '-'}` : 'Jamais joué'}
                 </span>
               </div>
@@ -2641,10 +2389,6 @@
 
     // Affiche l'état vide + bouton "Actualiser" : aucune requête Supabase
     // n'est envoyée tant que l'utilisateur n'a pas cliqué dessus.
-    // Charge les données pour le filtre courant : depuis le cache si déjà
-    // disponible, sinon depuis Supabase (seul cas qui déclenche une requête
-    // réseau). Réutilisé par le bouton "Actualiser" et par les boutons de
-    // filtre temporel (qui appellent explicitement une nouvelle période).
     async function loadDashboardFilterData(playerName) {
       if (!playerName) return;
       if (dashboardStatsCache.has(dashboardActiveFilter)) {
@@ -2652,7 +2396,7 @@
         return;
       }
       const listEl = document.getElementById('geo-companion-dashboard-list');
-      if (listEl) listEl.innerHTML = `<div class="gc-muted" style="font-size:13px;">Chargement…</div>`;
+      if (listEl) listEl.innerHTML = `<div class="gc-muted gc-fs-13">Chargement…</div>`;
 
       const allStats = await GeoCompanion.stats.getAllCountryStats(playerName, dashboardActiveFilter);
       dashboardStatsCache.set(dashboardActiveFilter, allStats);
@@ -2667,9 +2411,9 @@
       if (!listEl) return;
 
       listEl.innerHTML = `
-        <div style="text-align:center; padding:24px 0; opacity:0.75;">
-          <div style="margin-bottom:10px; font-size:13px;">Aucune donnée chargée pour cette période.</div>
-          <button id="geo-companion-dashboard-refresh-btn" class="gc-btn gc-btn--jouer gc-btn--pill" style="padding:8px 16px;">🔄 Actualiser</button>
+        <div class="gc-empty-state">
+          <div class="gc-mb-10-fs-13">Aucune donnée chargée pour cette période.</div>
+          <button id="geo-companion-dashboard-refresh-btn" class="gc-btn gc-btn--jouer gc-btn--pill gc-btn--refresh-dash">🔄 Actualiser</button>
         </div>
       `;
 
@@ -2687,18 +2431,16 @@
 
       panel.innerHTML = `
         <div class="gc-card-header gc-mb-6 gc-shrink-0">
-          <div class="gc-title" style="font-size:16px;">Mes stats</div>
-          <div style="display:flex; gap:6px;">
-            <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--danger gc-btn--pill" style="font-style:normal; padding:5px 10px;">🗑️</button>
-            <button id="geo-companion-dashboard-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--icon gc-btn--icon-accent" style="font-style:normal; font-size:18px;">${
+          <div class="gc-title gc-fs-16">Mes stats</div>
+          <div class="gc-flex-gap-6">
+            <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--danger gc-btn--pill gc-btn--delete-dash">🗑️</button>
+            <button id="geo-companion-dashboard-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--icon gc-btn--icon-accent gc-btn--collapse-dash">${
               dashboardCollapsed ? '▶' : '▼'
             }</button>
           </div>
         </div>
-        <div id="geo-companion-dashboard-body" style="display:${
-          dashboardCollapsed ? 'none' : 'flex'
-        }; flex-direction:column; min-height:0; flex:1;">
-          <hr class="gc-hr gc-hr--dashed" style="margin:0 0 10px;">
+        <div id="geo-companion-dashboard-body" class="gc-flex-col-fill ${dashboardCollapsed ? 'gc-collapsed' : ''}">
+          <hr class="gc-hr gc-hr--dashed gc-hr-tight">
           <div class="gc-btn-row gc-mb-8 gc-shrink-0">
             ${FILTERS.map(
               (f) => `
@@ -2711,13 +2453,13 @@
           <div class="gc-btn-row gc-btn-row--wrap gc-mb-10 gc-shrink-0">
             ${CONTINENT_ORDER.map(
               (c) => `
-              <button data-dash-continent="${c}" class="gc-btn gc-btn--flex-auto gc-btn--pill gc-btn--xs ${
+              <button data-dash-continent="${c}" class="gc-btn gc-btn--flex-auto gc-btn--pill gc-btn--xs gc-continent-btn ${
                 c === dashboardActiveContinent ? 'gc-btn--jouer' : 'gc-btn--secondary'
-              }" style="padding-left:6px; padding-right:6px;">${CONTINENT_LABELS[c]}</button>
+              }">${CONTINENT_LABELS[c]}</button>
             `
             ).join('')}
           </div>
-          <div id="geo-companion-dashboard-list" style="flex:1; overflow-y:auto; min-height:0;"></div>
+          <div id="geo-companion-dashboard-list" class="gc-scroll-fill"></div>
         </div>
       `;
 
@@ -2725,7 +2467,7 @@
       const dashboardBody = panel.querySelector('#geo-companion-dashboard-body');
       collapseBtn.addEventListener('click', () => {
         dashboardCollapsed = !dashboardCollapsed;
-        dashboardBody.style.display = dashboardCollapsed ? 'none' : 'flex';
+        dashboardBody.classList.toggle('gc-collapsed', dashboardCollapsed);
         collapseBtn.textContent = dashboardCollapsed ? '▶' : '▼';
       });
 
@@ -2763,8 +2505,6 @@
           renderDashboard();
           // Un clic sur un filtre est une demande explicite pour cette
           // période : on charge depuis le cache s'il existe, sinon on va
-          // chercher sur Supabase — contrairement au changement de continent
-          // (passif, ne déclenche jamais de requête).
           loadDashboardFilterData(playerName);
         });
       });
@@ -2773,7 +2513,6 @@
           const clicked = btn.dataset.dashContinent;
           // Un clic sur le continent déjà actif le désélectionne (affiche
           // tous les pays, tous continents confondus) plutôt que de rester
-          // bloqué dessus.
           dashboardActiveContinent = dashboardActiveContinent === clicked ? null : clicked;
           renderDashboard();
         });
@@ -2781,13 +2520,12 @@
 
       if (!playerName) {
         const listEl = panel.querySelector('#geo-companion-dashboard-list');
-        listEl.innerHTML = `<div style="opacity:0.6; font-size:13px;">Identification du joueur en cours…</div>`;
+        listEl.innerHTML = `<div class="gc-muted gc-fs-13">Identification du joueur en cours…</div>`;
         return;
       }
 
       // Aucune requête Supabase envoyée ici : on affiche le cache s'il existe
       // pour ce filtre, sinon un état vide avec bouton "Actualiser" — c'est
-      // le clic sur ce bouton qui déclenche la seule requête réseau.
       if (dashboardStatsCache.has(dashboardActiveFilter)) {
         renderDashboardCountryList(dashboardStatsCache.get(dashboardActiveFilter));
       } else {
@@ -2801,17 +2539,11 @@
         renderDashboard();
         // Filet de sécurité : en live challenge, la fin de partie/round
         // n'est pas toujours détectée de façon fiable (voir apiDetectionModule),
-        // donc les panneaux résultat/tips de la dernière partie peuvent rester
-        // affichés à tort. De retour sur l'accueil, ils n'ont plus lieu d'être
-        // dans tous les cas — on les nettoie systématiquement ici, qu'ils
-        // aient déjà été masqués ou non.
         if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
       } else {
         removeDashboard();
         // Complète le filet ci-dessus pour le cas où le joueur quitte la
         // partie vers une page qui n'est ni l'accueil ni une page de jeu
-        // (lobby, profil...) — sans ça, les panneaux restaient affichés tant
-        // qu'on ne repassait pas explicitement par l'accueil.
         if (wasInGameplayUrl && !nowInGameplayUrl && GeoCompanion.hideResultAndTipsPanels) {
           GeoCompanion.hideResultAndTipsPanels();
         }
@@ -2821,7 +2553,6 @@
 
     // Filet de sécurité indépendant du routing : dès qu'une partie démarre
     // (détecté de façon fiable via l'interception réseau, pas via l'URL),
-    // on masque le dashboard directement.
     GeoCompanion.on('gameStart', removeDashboard);
 
     // Un nouveau round enregistré rend les stats du dashboard obsolètes.
@@ -2831,9 +2562,6 @@
 
     // Détection de navigation SPA : GeoGuessr ne recharge pas la page à
     // chaque clic, donc on intercepte pushState/replaceState/popstate (même
-    // principe que le hook fetch/XHR plus haut). replaceState est nécessaire
-    // en plus de pushState : certaines transitions (ex: lancer une partie
-    // depuis l'accueil) semblent l'utiliser plutôt que pushState.
     const originalPushState = pageWindow.history.pushState;
     pageWindow.history.pushState = function (...args) {
       const result = originalPushState.apply(this, args);

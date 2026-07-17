@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.38
+// @version      1.60
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -180,6 +180,7 @@
       .gc-btn--icon { background: none; padding: 2px 4px; font-size: 15px; }
       .gc-btn--icon-overlay { background: rgba(0, 0, 0, 0.55); border-radius: 5px; padding: 4px 6px; font-size: 16px; }
       .gc-btn-row { display: flex; gap: 4px; }
+      .gc-btn-row--wrap { flex-wrap: wrap; }
 
       /* ==== Cartes ==== */
       .gc-card { background: var(--gc-bg-secondary); border-radius: 6px; padding: 7px 9px; font-size: 15px; }
@@ -204,6 +205,10 @@
       /* ==== Mise en page ==== */
       .gc-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
       .gc-grid-2--compact { gap: 3px 4px; }
+      /* max 2 colonnes : la largeur mini d'une colonne est 150px, ou la
+         moitié du conteneur (moins la moitié du gap) si celle-ci dépasse
+         150px — au-delà, auto-fit ne peut plus caser une 3e colonne. */
+      .gc-grid-2--responsive { grid-template-columns: repeat(auto-fit, minmax(max(150px, calc(50% - 2px)), 1fr)); }
       .gc-span-2 { grid-column: 1 / span 2; }
       .gc-hr { opacity: 0.15; margin: 12px 0; border-color: #888; }
       .gc-hr--dashed { border-style: dashed; opacity: 0.3; }
@@ -249,14 +254,6 @@
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
         max-width: 80vw;
       }
-
-      /* Voir foreignOverlayModule plus bas : dès qu'un élément de GeoGuessr
-         lui-même (menu profil, modale...) est ajouté par-dessus, on repasse
-         nos panneaux sous la interface du site le temps qu'il soit ouvert,
-         plutôt que de le recouvrir avec notre z-index habituellement énorme. */
-      body.gc-foreign-overlay-open .gc-panel {
-        z-index: 100 !important;
-      }
     `;
     document.head.appendChild(style);
   }
@@ -283,65 +280,6 @@
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 4000);
   };
-
-  // ============================================================
-  // CORE: foreignOverlay (menu profil GeoGuessr masqué par nos panneaux)
-  // ------------------------------------------------------------
-  // Nos panneaux (.gc-panel) utilisent un z-index volontairement énorme
-  // pour rester au-dessus du contenu du jeu. Problème : ça recouvre aussi
-  // les propres menus déroulants/modales de GeoGuessr (ex: le menu profil
-  // dans le header), qui apparaissent alors visuellement "en dessous".
-  // On ne connaît pas leurs sélecteurs exacts (et ils peuvent changer), donc
-  // on détecte génériquement : dès qu'un nouvel élément est ajouté comme
-  // enfant direct de <body> par le site (pas par nous), on suppose que
-  // c'est un overlay du site (menu, modale, tooltip portalé...) et on
-  // repasse temporairement nos panneaux sous lui via la classe CSS
-  // gc-foreign-overlay-open (voir injectThemeStyles). Restauré dès que cet
-  // élément étranger est retiré du DOM (menu refermé).
-  // ============================================================
-  (function foreignOverlayModule() {
-    function isOwnNode(node) {
-      return !!(node.id && node.id.startsWith('geo-companion'));
-    }
-
-    // Référence des enfants de <body> déjà présents une fois la page
-    // stabilisée (racine de l'app GeoGuessr, etc.) — sans ça, la racine
-    // de leur app compterait elle-même comme "étrangère" en permanence
-    // dès la première mutation, et la classe resterait activée pour de bon.
-    let baselineChildren = null;
-
-    function captureBaseline() {
-      baselineChildren = new Set(Array.from(document.body.children));
-    }
-
-    function refreshOverlayState() {
-      if (!baselineChildren) return; // référence pas encore figée, on ignore
-      const hasForeignOverlay = Array.from(document.body.children).some(
-        (child) => !isOwnNode(child) && !baselineChildren.has(child)
-      );
-      document.body.classList.toggle('gc-foreign-overlay-open', hasForeignOverlay);
-    }
-
-    // Le bootstrap tourne en document-start : document.body peut ne pas
-    // encore exister, on attend qu'il soit disponible avant d'observer.
-    function start() {
-      if (!document.body) {
-        setTimeout(start, 50);
-        return;
-      }
-      const observer = new MutationObserver(refreshOverlayState);
-      observer.observe(document.body, { childList: true });
-      // On fige la référence une fois la page chargée (pas avant : les
-      // éléments ajoutés par GeoGuessr à son propre démarrage ne doivent
-      // pas être pris pour un overlay).
-      if (document.readyState === 'complete') {
-        captureBaseline();
-      } else {
-        pageWindow.addEventListener('load', captureBaseline, { once: true });
-      }
-    }
-    start();
-  })();
 
   // ============================================================
   // CORE: détection des events de partie (fetch/XHR + parsing)
@@ -2355,6 +2293,66 @@
       if (el) el.remove();
     }
 
+    // Widget natif GeoGuessr juste en dessous duquel le dashboard doit se
+    // positionner : même largeur, écart vertical toujours identique entre
+    // le bas du dashboard et le haut de ce widget (voir positionDashboard).
+    const DASHBOARD_REFERENCE_WIDGET_SELECTOR = '.widget_root__KcxU_';
+    const DASHBOARD_TOP = 70; // position fixe du haut du dashboard
+    const DASHBOARD_WIDGET_GAP_REM = 1; // écart à maintenir avec le widget
+
+    // Convertit un nombre de rem en px selon la taille de police racine
+    // actuelle (mesurée à chaque appel plutôt que figée, au cas où elle
+    // changerait — coût négligeable).
+    function remToPx(rem) {
+      const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      return rem * rootFontSize;
+    }
+
+    // Aligne le dashboard sur le widget de référence (même largeur/position
+    // horizontale) et ajuste sa hauteur pour que l'écart avec ce widget
+    // reste constant, quelle que soit la position de celui-ci (résolution,
+    // contenu de la page...). Rappelé au rendu et sur resize/reflow — voir
+    // les observers plus bas.
+    function positionDashboard(panel) {
+      const widget = document.querySelector(DASHBOARD_REFERENCE_WIDGET_SELECTOR);
+      if (!widget) return; // widget introuvable (page différente, sélecteur changé...) : on garde le CSS par défaut
+      const rect = widget.getBoundingClientRect();
+      panel.style.left = `${rect.left}px`;
+      panel.style.right = 'auto';
+      panel.style.width = `${rect.width}px`;
+      panel.style.top = `${DASHBOARD_TOP}px`;
+      const availableHeight = rect.top - remToPx(DASHBOARD_WIDGET_GAP_REM) - DASHBOARD_TOP;
+      // La liste de pays scrolle déjà en interne (#geo-companion-dashboard-list,
+      // overflow-y:auto) si jamais l'espace disponible devient trop petit —
+      // on évite juste ici une hauteur négative/absurde.
+      panel.style.maxHeight = `${Math.max(availableHeight, 60)}px`;
+    }
+
+    // Repositionne dès que possible après un changement de layout : resize
+    // fenêtre, et ResizeObserver sur le widget lui-même pour les cas où sa
+    // position bouge sans resize de la fenêtre (contenu de page qui change).
+    let dashboardWidgetResizeObserver = null;
+    function watchDashboardReferenceWidget() {
+      const panel = document.getElementById(DASHBOARD_ID);
+      if (!panel) return;
+      positionDashboard(panel);
+      const widget = document.querySelector(DASHBOARD_REFERENCE_WIDGET_SELECTOR);
+      if (widget && dashboardWidgetResizeObserver) {
+        dashboardWidgetResizeObserver.disconnect();
+        dashboardWidgetResizeObserver.observe(widget);
+      }
+    }
+    if (typeof ResizeObserver !== 'undefined') {
+      dashboardWidgetResizeObserver = new ResizeObserver(() => {
+        const panel = document.getElementById(DASHBOARD_ID);
+        if (panel) positionDashboard(panel);
+      });
+    }
+    pageWindow.addEventListener('resize', () => {
+      const panel = document.getElementById(DASHBOARD_ID);
+      if (panel) positionDashboard(panel);
+    });
+
     function ensureDashboard() {
       let panel = document.getElementById(DASHBOARD_ID);
       if (!panel) {
@@ -2371,6 +2369,7 @@
         `;
         document.body.appendChild(panel);
       }
+      watchDashboardReferenceWidget();
       return panel;
     }
 
@@ -2400,7 +2399,11 @@
       const listEl = document.getElementById('geo-companion-dashboard-list');
       if (!listEl) return;
 
-      const allCodesForContinent = COUNTRIES_BY_CONTINENT[dashboardActiveContinent] || [];
+      // Pas de continent sélectionné (désélectionné en recliquant dessus) :
+      // on affiche tous les pays, tous continents confondus.
+      const allCodesForContinent = dashboardActiveContinent
+        ? COUNTRIES_BY_CONTINENT[dashboardActiveContinent] || []
+        : Object.values(COUNTRIES_BY_CONTINENT).flat();
       const countries = allCodesForContinent
         .map((code) => ({
           code,
@@ -2424,12 +2427,14 @@
         });
 
       if (countries.length === 0) {
-        listEl.innerHTML = `<div class="gc-muted" style="font-size:14px;">Aucun pays connu sur ce continent.</div>`;
+        listEl.innerHTML = `<div class="gc-muted" style="font-size:14px;">${
+          dashboardActiveContinent ? 'Aucun pays connu sur ce continent.' : 'Aucun pays connu.'
+        }</div>`;
         return;
       }
 
       listEl.innerHTML = `
-        <div class="gc-grid-2 gc-grid-2--compact">
+        <div class="gc-grid-2 gc-grid-2--compact gc-grid-2--responsive">
           ${countries
             .map((c) => {
               const color = successColor(c.successRate);
@@ -2523,7 +2528,7 @@
             `
             ).join('')}
           </div>
-          <div class="gc-btn-row gc-mb-10 gc-shrink-0">
+          <div class="gc-btn-row gc-btn-row--wrap gc-mb-10 gc-shrink-0">
             ${CONTINENT_ORDER.map(
               (c) => `
               <button data-dash-continent="${c}" class="gc-btn gc-btn--flex-auto gc-btn--pill gc-btn--xs ${
@@ -2585,7 +2590,11 @@
       });
       panel.querySelectorAll('[data-dash-continent]').forEach((btn) => {
         btn.addEventListener('click', () => {
-          dashboardActiveContinent = btn.dataset.dashContinent;
+          const clicked = btn.dataset.dashContinent;
+          // Un clic sur le continent déjà actif le désélectionne (affiche
+          // tous les pays, tous continents confondus) plutôt que de rester
+          // bloqué dessus.
+          dashboardActiveContinent = dashboardActiveContinent === clicked ? null : clicked;
           renderDashboard();
         });
       });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      1.67
+// @version      1.71
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -335,6 +335,20 @@
     // donc indépendamment de si HTTP a suivi ou non — best-effort, à confirmer
     // sur le terrain.
     let liveChallengeRound = savedState?.liveChallengeRound ?? null;
+    // Live challenge : notre propre guess (lat/lng/distance), capturé depuis
+    // les messages WS "LiveChallengeLeaderboardUpdate" — confirmé par
+    // capture réseau réelle : liveChallenge.leaderboards.round.entries[i] et
+    // .guesses[i] se correspondent par index (même ordre), donc on retrouve
+    // notre guess en cherchant notre pseudo dans entries. Fiable pour tout
+    // le monde (host ou non), contrairement au snapshot HTTP. Clé = numéro
+    // de round, pas persisté (ré-obtenu à chaque partie).
+    let wsOwnGuessByRound = {};
+    // Dernier objet "game" émis pour un roundEnd donné (par numéro de round).
+    // Sert uniquement à pouvoir rafraîchir l'affichage si le guess de CE
+    // joueur (voir wsOwnGuessByRound) arrive en retard — après le RoundEnded
+    // du round concerné (typiquement : joueur qui n'a pas cliqué à temps,
+    // le LeaderboardUpdate avec son guess arrive après coup). Non persisté.
+    let lastEmittedRoundGameByRound = {};
 
     function persistState() {
       GM_setValue(STATE_KEY, {
@@ -389,6 +403,8 @@
         liveChallengeRound = null;
         lastGoodGameSnapshot = null;
         lastGoodGameSnapshotRoundWithGuess = null;
+        wsOwnGuessByRound = {};
+        lastEmittedRoundGameByRound = {};
         persistState();
         GeoCompanion.emit('gameStart', game);
       }
@@ -585,11 +601,31 @@
                 ? { ...(lastGoodGameSnapshot || {}), ...state, guesses: state.guesses ?? lastGoodGameSnapshot?.guesses ?? null }
                 : lastGoodGameSnapshot;
               if (game) {
+                // Le guess capturé via LeaderboardUpdate (wsOwnGuessByRound)
+                // est fiable pour tout le monde, host ou non — on l'utilise
+                // en priorité pour lat/lng/distance, tout en gardant les
+                // éventuels autres champs (score...) du guess HTTP existant
+                // s'il y en avait un.
+                const wsGuess = wsOwnGuessByRound[endedRound];
+                const finalGame = wsGuess
+                  ? {
+                      ...game,
+                      guesses: [
+                        {
+                          ...(game.guesses?.[game.guesses.length - 1] || {}),
+                          lat: wsGuess.lat,
+                          lng: wsGuess.lng,
+                          distanceInMeters: wsGuess.distanceMeters,
+                        },
+                      ],
+                    }
+                  : game;
                 roundEndEmittedRound = endedRound;
                 liveChallengeRound = endedRound;
                 persistState();
+                lastEmittedRoundGameByRound[endedRound] = finalGame;
                 GeoCompanion.emit('roundEnd', {
-                  ...game,
+                  ...finalGame,
                   round: endedRound,
                   _source: state ? 'ws-round-ended' : 'ws-round-ended-http-fallback',
                 });
@@ -613,6 +649,64 @@
             if (typeof roundNumber === 'number' && roundNumber !== liveChallengeRound) {
               liveChallengeRound = roundNumber;
               persistState();
+            }
+
+            // Notre propre guess pour ce round : liveChallenge.leaderboards
+            // .round.entries[i] et .guesses[i] se correspondent par index
+            // (même ordre) — confirmé par capture réseau réelle. Fiable pour
+            // tout le monde (host ou non), contrairement au guess du
+            // snapshot HTTP (absent pour les non-hôtes). On retrouve notre
+            // position via notre pseudo (identityModule).
+            const roundLeaderboard = data.liveChallenge?.leaderboards?.round;
+            if (
+              roundLeaderboard &&
+              typeof roundLeaderboard.roundNumber === 'number' &&
+              Array.isArray(roundLeaderboard.entries) &&
+              Array.isArray(roundLeaderboard.guesses)
+            ) {
+              const myName = GeoCompanion.getPlayerName?.();
+              if (myName) {
+                const myIndex = roundLeaderboard.entries.findIndex((e) => e && e.name === myName);
+                const myGuess = myIndex !== -1 ? roundLeaderboard.guesses[myIndex] : null;
+                if (myGuess) {
+                  const roundNum = roundLeaderboard.roundNumber;
+                  const hadGuessBefore = wsOwnGuessByRound[roundNum] != null;
+                  wsOwnGuessByRound[roundNum] = {
+                    lat: myGuess.lat,
+                    lng: myGuess.lng,
+                    distanceMeters: myGuess.distance,
+                  };
+
+                  // Cas particulier : ce guess arrive APRÈS le roundEnd déjà
+                  // traité pour ce round (joueur qui n'a pas cliqué à temps,
+                  // le LeaderboardUpdate avec son guess arrive en retard).
+                  // On rafraîchit l'affichage déjà rendu plutôt que de le
+                  // laisser sans guess indéfiniment — sans repasser par
+                  // Supabase (voir _isLateGuessUpdate dans roundHistoryModule),
+                  // pour ne pas créer de doublon en base.
+                  if (!hadGuessBefore && roundEndEmittedRound === roundNum && lastEmittedRoundGameByRound[roundNum]) {
+                    const previousGame = lastEmittedRoundGameByRound[roundNum];
+                    const updatedGame = {
+                      ...previousGame,
+                      guesses: [
+                        {
+                          ...(previousGame.guesses?.[0] || {}),
+                          lat: myGuess.lat,
+                          lng: myGuess.lng,
+                          distanceInMeters: myGuess.distance,
+                        },
+                      ],
+                    };
+                    lastEmittedRoundGameByRound[roundNum] = updatedGame;
+                    GeoCompanion.emit('roundEnd', {
+                      ...updatedGame,
+                      round: roundNum,
+                      _source: 'ws-late-guess-update',
+                      _isLateGuessUpdate: true,
+                    });
+                  }
+                }
+              }
             }
           }
         });
@@ -1221,6 +1315,16 @@
 
       if (row.player_name) {
         await supabaseClient.insert('profiles', { player_name: row.player_name }, { ignoreDuplicates: true });
+      }
+
+      // _isLateGuessUpdate (voir apiDetectionModule) : ce round a déjà été
+      // enregistré une première fois — ceci n'est qu'un rafraîchissement de
+      // l'affichage suite à un guess arrivé en retard (joueur qui n'a pas
+      // cliqué à temps). On ne réinsère pas dans Supabase, ça créerait un
+      // doublon (pas de contrainte d'unicité sur game_token+round_number).
+      if (game._isLateGuessUpdate) {
+        console.log('[GeoCompanion] 🔄 Affichage rafraîchi suite à un guess arrivé en retard (round déjà enregistré, pas de ré-insertion).');
+        return;
       }
 
       const ok = await supabaseClient.insert('rounds', row);

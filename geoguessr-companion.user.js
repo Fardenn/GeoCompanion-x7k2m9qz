@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      2.41
-// @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats
+// @version      2.42
+// @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats (test edit Claude)
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
 // @grant        GM_setValue
@@ -19,8 +19,7 @@
   const SUPABASE_URL = 'https://lpbtzcpmqqsaedpdhptl.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_gH_ae7VUiLAEpuLdRBTlBA_71XF4K44';
 
-  // Accès au vrai contexte de la page : dès qu'un @grant autre que "none" est
-  // utilisé, Tampermonkey exécute le script dans un sandbox où "window" ne
+  // Accès au vrai contexte de page : un @grant actif fait tourner le script dans un sandbox où "window" ne pointe pas vers la page réelle.
   const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
   // CORE: namespace global + event bus
@@ -46,15 +45,13 @@
     }
   };
 
-  // Events disponibles : 'gameStart', 'gameEnd', 'roundStart', 'roundEnd'
-  // Payload : l'objet "game" tel que renvoyé par l'API GeoGuessr
+  // Events disponibles : gameStart/gameEnd/roundStart/roundEnd — payload = l'objet "game" renvoyé par l'API GeoGuessr.
 
-  // CORE: thème (variables CSS injectées, alignées sur le vrai
+  // CORE: thème (variables CSS injectées, alignées sur le design system GeoGuessr)
   function injectThemeStyles() {
     if (document.getElementById('geo-companion-theme')) return; // déjà injecté
 
-    // Police réellement utilisée par GeoGuessr sur cette page (fonctionne
-    // même si leur police maison "Geoguessr Sans" n'est pas publiquement
+    // Police réellement utilisée par GeoGuessr (fonctionne même si "Geoguessr Sans" n'est pas publiquement accessible en @font-face).
     let detectedFont = null;
     try {
       const bodyFont = pageWindow.getComputedStyle(document.body).fontFamily;
@@ -67,8 +64,7 @@
     style.id = 'geo-companion-theme';
     style.textContent = `
       :root {
-        /* Alias vers leur design system (--ds-color-*), repli sur les
-          valeurs relevées manuellement si absentes. */
+        /* Alias vers leur design system (--ds-color-*), repli sur les valeurs relevées manuellement si absentes. */
         --gc-bg: var(--ds-color-purple-100, #171235);
         --gc-bg-gradient: linear-gradient(160deg, var(--ds-color-purple-90, #211a4c), var(--ds-color-purple-100, #171235));
         --gc-bg-secondary: var(--ds-color-purple-90, #211a4c);
@@ -82,8 +78,7 @@
         --gc-text: var(--ds-color-white-100, #fff);
         --gc-border: 1px solid var(--ds-color-white-10, rgba(255, 255, 255, 0.1));
         --gc-radius: var(--surface-radius-inner, 0.75rem);
-        /* Police GeoGuessr héritée en live, repli sur celle détectée au
-          chargement puis repli générique. */
+        /* Police GeoGuessr héritée en live, repli sur celle détectée au chargement puis repli générique. */
         --gc-font: var(--default-font, ${detectedFont ? detectedFont.replace(/"/g, "'") : "-apple-system, sans-serif"});
       }
 
@@ -103,8 +98,7 @@
         line-height: 1.4;
         box-sizing: border-box;
       }
-      /* z-index:1 ci-dessus = uniquement pour le dashboard (menu profil).
-        Panneaux résultat/tips remontés, sinon invisibles. */
+      /* z-index:1 ci-dessus = uniquement pour le dashboard (menu profil), les panneaux résultat/tips sont remontés sinon invisibles. */
       #geo-companion-panel,
       #geo-companion-tips-panel {
         z-index: 999999;
@@ -157,11 +151,9 @@
         padding-bottom: 0.125rem;
       }
       .gc-btn--secondary { background: var(--gc-bg-secondary-hover); }
-      /* Icônes simples (fond transparent) toujours utilisées en accent : une
-        seule classe plutôt que gc-btn--icon + gc-btn--icon-accent séparées. */
+      /* Icônes simples (fond transparent) toujours utilisées en accent : une seule classe plutôt que icon + icon-accent séparées. */
       .gc-icon-btn { background: none; padding: 2px 4px; font-size: 15px; color: var(--gc-accent); }
-      /* Icônes en médaillon (fond sombre semi-transparent, sur une image) :
-        une classe par couleur plutôt que la base + un modificateur couleur. */
+      /* Icônes en médaillon (fond sombre semi-transparent, sur une image) : une classe par couleur plutôt que base + modificateur. */
       .gc-btn--edit-tip { background: rgba(0, 0, 0, 0.55); border-radius: 5px; padding: 4px 6px; font-size: 16px; color: var(--gc-accent); }
       .gc-btn--delete-tip { background: rgba(0, 0, 0, 0.55); border-radius: 5px; padding: 4px 6px; font-size: 16px; color: var(--gc-danger); }
       .gc-btn-row { display: flex; gap: 4px; }
@@ -190,8 +182,7 @@
       /* ==== Mise en page ==== */
       .gc-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
       .gc-grid-2--compact { gap: 3px 4px; }
-      /* max 2 colonnes : largeur mini = 150px ou moitié du conteneur si
-        plus grande — au-delà, impossible de caser une 3e colonne. */
+      /* max 2 colonnes : largeur mini = 150px ou moitié du conteneur si plus grande, au-delà impossible de caser une 3e colonne. */
       .gc-grid-2--responsive { grid-template-columns: repeat(auto-fit, minmax(max(150px, calc(50% - 2px)), 1fr)); }
       .gc-span-2 { grid-column: 1 / span 2; }
       .gc-hr { opacity: 0.15; margin: 12px 0; border-color: #888; }
@@ -239,8 +230,7 @@
       /* ==== Composants (remplacent les style="" inline correspondants) ==== */
       .gc-result-panel { top: 20px; right: 20px; width: clamp(300px, 18.75vw, 480px); max-height: 80vh; overflow-y: auto; font-size: 20px; }
       .gc-tips-panel { top: 20px; left: 20px; width: clamp(300px, 18.75vw, 480px); height: auto; max-height: 85vh; padding: 14px; font-size: 19px; }
-      /* Duel : les panneaux sont positionnés trop haut par défaut (recouvrent
-        l'interface native du duel) — abaissés à ~20% du haut de l'écran. */
+      /* Duel : les panneaux sont trop haut par défaut (recouvrent l'interface native du duel), abaissés à ~20% du haut de l'écran. */
       .gc-panel--duel-offset { top: 20% !important; }
       .gc-dashboard-panel { top: 70px; right: 304px; width: clamp(340px, 21vw, 536px); max-height: 61vh; padding: 12px; font-size: clamp(11px, 0.95vw, 14px); }
 
@@ -294,8 +284,7 @@
       .gc-textarea-sm { min-height: 50px; }
       .gc-textarea-md { min-height: 60px; }
       .gc-continent-btn { padding-left: 6px; padding-right: 6px; }
-      /* OK/Annuler des mini-formulaires d'édition (route/champ/voiture/tip) :
-        une classe par rôle plutôt que btn--flex + couleur + padding séparés. */
+      /* OK/Annuler des mini-formulaires d'édition (route/champ/voiture/tip) : une classe par rôle plutôt que styles séparés. */
       .gc-btn--ok { flex: 1; background: var(--gc-accent-gradient); padding: 4px; font-size: 13px; }
       .gc-btn--cancel { flex: 1; background: var(--gc-bg-secondary-hover); padding: 4px; font-size: 13px; }
       .gc-add-tip-btn { padding: 7px; font-size: 16px; background: var(--gc-bg-secondary-hover); width: 100%; margin-top: 6px; flex-shrink: 0; }
@@ -346,8 +335,7 @@
 
   // CORE: détection des events de partie (fetch/XHR + parsing)
   (function apiDetectionModule() {
-    // --- état interne, persisté pour survivre à un rechargement de page ---
-    // (le tableau "guesses" de l'API est cumulatif sur toute la partie ; sans
+    // État interne, persisté pour survivre à un rechargement — le tableau "guesses" de l'API est cumulatif, d'où guessesSeenTotal.
     const STATE_KEY = 'geoCompanion_apiState';
     const savedState = GM_getValue(STATE_KEY, null);
 
@@ -355,20 +343,15 @@
     let currentRound = savedState?.currentRound ?? null;
     let guessesSeenTotal = savedState?.guessesSeenTotal ?? 0;
     let gameState = savedState?.gameState ?? null;
-    // Round pour lequel l'event roundEnd a déjà été émis (live challenge,
-    // via le WS "LiveChallengeRoundEnded") — évite une double émission.
+    // Round pour lequel l'event roundEnd a déjà été émis (live challenge, via le WS "LiveChallengeRoundEnded") — évite une double émission.
     let roundEndEmittedRound = savedState?.roundEndEmittedRound ?? null;
-    // Dernier objet game live challenge connu (capturé en passif dès qu'une
-    // réponse HTTP a le champ rounds[].state) — utilisé comme base pour des
+    // Dernier objet game live challenge connu (capturé en passif dès qu'une réponse HTTP a le champ rounds[].state), utilisé comme base de repli.
     let lastGoodGameSnapshot = null;
-    // Live challenge uniquement : les events WebSocket de début/fin de round
-    // n'incluent pas le numéro de round (juste un code). Sans ce compteur
+    // Live challenge uniquement : les events WS de début/fin de round n'incluent pas le numéro de round, juste un code — d'où ce compteur.
     let liveChallengeRound = savedState?.liveChallengeRound ?? null;
-    // Live challenge : notre propre guess (lat/lng/distance), capturé depuis
-    // les messages WS "LiveChallengeLeaderboardUpdate" — confirmé par
+    // Live challenge : notre propre guess (lat/lng/distance), capturé depuis les messages WS "LiveChallengeLeaderboardUpdate".
     let wsOwnGuessByRound = {};
-    // Dernier objet "game" émis pour un roundEnd donné (par numéro de round).
-    // Sert uniquement à pouvoir rafraîchir l'affichage si le guess de CE
+    // Dernier objet "game" émis pour un roundEnd donné (par round), pour pouvoir rafraîchir l'affichage si le guess arrive en retard.
     let lastEmittedRoundGameByRound = {};
 
     function persistState() {
@@ -382,14 +365,12 @@
       });
     }
 
-    // Récupère un identifiant de partie quel que soit le nom du champ utilisé
-    // selon le mode (classic, challenge, live challenge, battle royale, duels...)
+    // Le nom du champ identifiant varie selon le mode (classic, challenge, live challenge, battle royale, duels...).
     function getGameToken(game) {
       return game.token || game.gameId || game.id || null;
     }
 
-    // Certaines réponses live challenge n'ont aucun champ round exploitable
-    // au niveau racine (contrairement au mode classique) — on retombe alors
+    // Certaines réponses live challenge n'ont aucun champ round exploitable au niveau racine (contrairement au mode classique).
     function deriveRoundNumber(game) {
       const topLevel = game.round ?? game.roundNumber ?? game.currentRoundNumber;
       if (typeof topLevel === 'number') return topLevel;
@@ -402,7 +383,6 @@
       return null;
     }
 
-    // Analyse un objet "game" renvoyé par l'API et émet les events correspondants
     function handleGameObject(game) {
       if (!game || typeof game !== 'object') return;
 
@@ -428,16 +408,14 @@
       const round = deriveRoundNumber(game);
       const roundsInfo = game.rounds || [];
       const currentRoundInfo = typeof round === 'number' ? roundsInfo[round - 1] : null;
-      // Le champ state existe uniquement en live challenge — sa présence
-      // indique qu'on ne doit RIEN déclencher depuis HTTP pour cette réponse
+      // Le champ state existe uniquement en live challenge — sa présence indique qu'il ne faut RIEN déclencher depuis HTTP ici.
       const isLiveChallengeResponse = currentRoundInfo?.state != null;
 
       if (isLiveChallengeResponse) {
         lastGoodGameSnapshot = game;
       }
 
-      // 1) Détection "début de round" : le numéro de round a augmenté. Pas
-      //    en live challenge (géré par le WS "LiveChallengeRoundStarting").
+      // Détection "début de round" (numéro augmenté) : pas en live challenge, géré par le WS "LiveChallengeRoundStarting".
       if (typeof round === 'number' && round !== currentRound) {
         currentRound = round;
         persistState();
@@ -446,8 +424,7 @@
         }
       }
 
-      // Le reste (fin de round, fin de partie) ne concerne que les modes
-      // autres que live challenge — heuristique "le nombre de guesses a
+      // Le reste (fin de round/partie) ne concerne pas le live challenge — détecté via l'augmentation du nombre de guesses.
       if (isLiveChallengeResponse) return;
 
       const guesses = game.player?.guesses || game.guesses;
@@ -476,8 +453,7 @@
         /\/api\/v3\/games\/[^/]+/.test(url) ||
         /\/api\/v3\/(battle-royale|duels)\//.test(url) ||
         /\/api\/v3\/challenges\/[^/]+/.test(url) ||
-        // Live challenge : domaine et format différents du reste de l'API
-        // (game-server.geoguessr.com/api/live-challenge/{token}[/guess|/advance-round|/{round}])
+        // Live challenge : domaine/format différents (game-server.geoguessr.com/api/live-challenge/{token}[/guess|/advance-round|/{round}]).
         /\/api\/live-challenge\//.test(url)
       );
     }
@@ -526,8 +502,7 @@
       return originalSend.apply(this, args);
     };
 
-    // --- Hook WebSocket (live challenge + duel) ---
-    // En live challenge, GeoGuessr pousse les vrais events de round/partie
+    // --- Hook WebSocket (live challenge + duel) : GeoGuessr y pousse les vrais events de round/partie ---
     const OriginalWebSocket = pageWindow.WebSocket;
     if (typeof OriginalWebSocket === 'function') {
       pageWindow.WebSocket = function (...args) {
@@ -548,18 +523,15 @@
             });
           } else if (data.code === 'LiveChallengeRoundEnded') {
             const state = data.liveChallenge?.state;
-            // currentRoundNumber est présent directement sur ce message
-            // (confirmé par capture réseau réelle) — plus fiable que le
+            // currentRoundNumber est présent directement sur ce message (confirmé par capture réseau réelle) — plus fiable que le compteur local.
             const endedRound = state?.currentRoundNumber ?? liveChallengeRound ?? currentRound ?? 1;
             if (roundEndEmittedRound !== endedRound) {
-              // state a toujours guesses:null (confirmé par capture réseau) —
-              // le guess de CE joueur ne s'y trouve pas, seulement dans le
+              // state a toujours guesses:null (confirmé par capture réseau) — le guess de ce joueur est ailleurs (LeaderboardUpdate).
               const game = state
                 ? { ...(lastGoodGameSnapshot || {}), ...state, guesses: state.guesses ?? lastGoodGameSnapshot?.guesses ?? null }
                 : lastGoodGameSnapshot;
               if (game) {
-                // Le guess capturé via LeaderboardUpdate (wsOwnGuessByRound)
-                // est fiable pour tout le monde, host ou non — on l'utilise
+                // Le guess capturé via LeaderboardUpdate (wsOwnGuessByRound) est fiable pour tout le monde, host ou non — utilisé en priorité.
                 const wsGuess = wsOwnGuessByRound[endedRound];
                 const finalGame = wsGuess
                   ? {
@@ -587,30 +559,21 @@
               }
             }
           } else if (data.code === 'FinishChallengeFinished') {
-            // Le vrai code est "FinishChallengeFinished", pas
-            // "LiveChallengeFinished" (confirmé par capture réseau réelle) —
+            // Le vrai code est "FinishChallengeFinished", pas "LiveChallengeFinished" (confirmé par capture réseau réelle).
             if (gameState !== 'finished') {
               gameState = 'finished';
               persistState();
               GeoCompanion.emit('gameEnd', data.liveChallenge?.state || lastGoodGameSnapshot || {});
             }
           } else if (data.code === 'DuelStarted' || data.code === 'DuelNewRound') {
-            // DuelStarted = tout premier round de la partie, DuelNewRound =
-            // rounds suivants. Délai de 3s avant de masquer (demande
-            // explicite) : sinon les panneaux du round précédent
-            // disparaissent instantanément, avant d'avoir pu être lus.
+            // DuelStarted = premier round, DuelNewRound = suivants ; délai de 3s (demande explicite) pour laisser lire les panneaux du round précédent.
             const duelStateSnapshot = data.duel?.state || lastGoodGameSnapshot || {};
             const source = data.code === 'DuelStarted' ? 'ws-duel-started' : 'ws-duel-new-round';
             setTimeout(() => {
               GeoCompanion.emit('roundStart', { ...duelStateSnapshot, _source: source });
             }, 3000);
           } else if (data.code === 'DuelRoundTimedOut') {
-            // Structure confirmée par capture réseau réelle : le pays est sur
-            // rounds[].panorama.countryCode (pas question.panoramaQuestionPayload
-            // comme en live challenge) — voir le repli ajouté dans extractRoundData.
-            // Pas de score/guess exploitable ici (imbriqués par équipe/joueur
-            // dans duel.state.teams[].players[].guesses) — pas géré, demande
-            // explicite : seul le pays (pour les tips) nous intéresse en duel.
+            // Pays sur rounds[].panorama.countryCode (pas panoramaQuestionPayload comme en live challenge, confirmé par capture réseau) ; score/guess par équipe non géré, seul le pays nous intéresse en duel (demande explicite).
             const duelState = data.duel?.state;
             const endedRound = duelState?.currentRoundNumber ?? duelState?.round ?? liveChallengeRound ?? currentRound ?? 1;
             if (roundEndEmittedRound !== endedRound) {
@@ -630,9 +593,7 @@
               }
             }
           } else if (data.code === 'DuelFinished') {
-            // Contrairement au live challenge (où gameEnd se déclenche trop
-            // tôt pour masquer directement, voir plus bas), demande
-            // explicite ici : DuelFinished masque directement les panneaux.
+            // Contrairement au live challenge (gameEnd trop précoce pour masquer, voir plus bas), DuelFinished masque directement les panneaux (demande explicite).
             if (gameState !== 'finished') {
               gameState = 'finished';
               persistState();
@@ -640,16 +601,14 @@
             }
             if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
           } else if (data.code === 'LiveChallengeLeaderboardUpdate') {
-            // Repli supplémentaire pour garder liveChallengeRound à jour
-            // entre deux RoundEnded (utile si un message venait à être
+            // Repli pour garder liveChallengeRound à jour entre deux RoundEnded (utile si un message venait à être manqué).
             const roundNumber = data.liveChallenge?.leaderboards?.roundGuessTime?.roundNumber;
             if (typeof roundNumber === 'number' && roundNumber !== liveChallengeRound) {
               liveChallengeRound = roundNumber;
               persistState();
             }
 
-            // Notre propre guess pour ce round : liveChallenge.leaderboards
-            // .round.entries[i] et .guesses[i] se correspondent par index
+            // Notre guess pour ce round : liveChallenge.leaderboards.round.entries[i] et .guesses[i] se correspondent par index.
             const roundLeaderboard = data.liveChallenge?.leaderboards?.round;
             if (
               roundLeaderboard &&
@@ -665,8 +624,7 @@
                 if (myGuess) {
                   const roundNum = roundLeaderboard.roundNumber;
                   const hadGuessBefore = wsOwnGuessByRound[roundNum] != null;
-                  // Score absent du guess pour certains joueurs même via HTTP
-                  // (même souci racine que country_code/actual_lat avant) —
+                  // Score parfois absent du guess même via HTTP (même souci racine que country_code/actual_lat) — plusieurs replis testés.
                   const myScore =
                     myGuess.score ??
                     myGuess.roundScoreInPoints ??
@@ -690,8 +648,7 @@
                     score: myScore,
                   };
 
-                  // Cas particulier : ce guess arrive APRÈS le roundEnd déjà
-                  // traité pour ce round (joueur qui n'a pas cliqué à temps,
+                  // Cas particulier : ce guess arrive après le roundEnd déjà traité (joueur qui n'a pas cliqué à temps) — on met à jour et ré-émet.
                   if (!hadGuessBefore && roundEndEmittedRound === roundNum && lastEmittedRoundGameByRound[roundNum]) {
                     const previousGame = lastEmittedRoundGameByRound[roundNum];
                     const updatedGame = {
@@ -720,8 +677,7 @@
         });
         return ws;
       };
-      // Préserve le prototype et les constantes statiques (OPEN, CLOSED...)
-      // pour que le reste du site continue de fonctionner normalement.
+      // Préserve le prototype et les constantes statiques (OPEN, CLOSED...) pour que le reste du site continue de fonctionner normalement.
       pageWindow.WebSocket.prototype = OriginalWebSocket.prototype;
       Object.setPrototypeOf(pageWindow.WebSocket, OriginalWebSocket);
     }
@@ -760,8 +716,7 @@
     let cachedName = GM_getValue(STORAGE_KEY, null);
     let observer = null;
 
-    // Sélecteur best-effort basé sur le header actuel de GeoGuessr
-    // (<span class="nick_nick__XXXXX">Pseudo</span>). Le suffixe hashé
+    // Sélecteur best-effort sur le header GeoGuessr (span class="nick_nick__XXXXX") — le suffixe hashé peut changer avec leurs déploiements.
     function detectPlayerNameFromDom() {
       const el = document.querySelector('[class*="nick_nick__"]');
       const name = el?.textContent?.trim();
@@ -794,18 +749,15 @@
       }
     }
 
-    // Le script tourne en @run-at document-start : document.body peut ne
-    // pas encore exister à ce stade. On diffère l'init si besoin plutôt
+    // @run-at document-start : document.body peut ne pas encore exister — on diffère l'init si besoin.
     function initDetection() {
-      // Tentative immédiate (au cas où le header serait déjà chargé), puis
-      // surveillance du DOM : le header peut apparaître après coup
+      // Tentative immédiate, puis surveillance du DOM (le header peut apparaître après coup).
       tryDetect();
       if (!cachedName) {
         observer = new MutationObserver(() => tryDetect());
         observer.observe(document.body, { childList: true, subtree: true });
 
-        // Si rien après quelques secondes, on demande manuellement plutôt
-        // que de rester bloqué indéfiniment sans pseudo.
+        // Si rien après quelques secondes, on demande manuellement plutôt que de rester bloqué indéfiniment sans pseudo.
         setTimeout(() => {
           if (observer) {
             observer.disconnect();
@@ -831,9 +783,7 @@
     }
   })();
 
-  // CORE: supabaseClient
-  // Toutes les méthodes partagent le même fetch + la même gestion d'erreur
-  // (log + notification) — factorisé ici plutôt que répété 6 fois.
+  // CORE: supabaseClient — toutes les méthodes partagent le même fetch + la même gestion d'erreur (log + notification), factorisé plutôt que répété.
   async function supabaseFetch(path, options, errorLabel) {
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -855,8 +805,7 @@
   }
 
   const supabaseClient = {
-    // insert une ou plusieurs lignes.
-    // - merge: true fait un upsert avec update sur conflit (nécessite une policy RLS UPDATE)
+    // insert une ou plusieurs lignes ; merge:true fait un upsert (nécessite une policy RLS UPDATE).
     async insert(table, row, { merge = false, ignoreDuplicates = false } = {}) {
       let prefer = 'return=minimal';
       if (merge) prefer = 'resolution=merge-duplicates,return=minimal';
@@ -875,7 +824,6 @@
       return res ? await res.json() : null;
     },
 
-    // met à jour la ligne d'id donné avec les champs de `patch`
     async update(table, id, patch) {
       const res = await supabaseFetch(
         `${table}?id=eq.${id}`,
@@ -890,8 +838,7 @@
       return this.removeWhere(table, `id=eq.${id}`);
     },
 
-    // suppression par filtre PostgREST (ex: "player_name=eq.X&played_at=gte....")
-    // plutôt que par id unique — utilisé aussi pour les suppressions en masse.
+    // suppression par filtre PostgREST plutôt que par id unique — utilisé aussi pour les suppressions en masse.
     async removeWhere(table, query) {
       const res = await supabaseFetch(
         `${table}?${query}`,
@@ -901,8 +848,7 @@
       return !!res;
     },
 
-    // appel d'une fonction Postgres (RPC) — utilisé pour les agrégats
-    // calculés côté base plutôt que côté client (voir supabase-stats-functions.sql)
+    // appel d'une fonction Postgres (RPC) — agrégats calculés côté base plutôt que côté client (voir supabase-stats-functions.sql).
     async rpc(fnName, params = {}) {
       const res = await supabaseFetch(
         `rpc/${fnName}`,
@@ -986,8 +932,7 @@
     return CONTINENT_BY_COUNTRY[code.toUpperCase()] || null;
   }
 
-  // Inverse de CONTINENT_BY_COUNTRY : liste de tous les codes pays connus
-  // pour un continent donné (utilisé pour afficher la liste complète des
+  // Inverse de CONTINENT_BY_COUNTRY : liste de tous les codes pays connus pour un continent donné.
   const COUNTRIES_BY_CONTINENT = (() => {
     const grouped = {};
     for (const [code, continent] of Object.entries(CONTINENT_BY_COUNTRY)) {
@@ -997,8 +942,7 @@
     return grouped;
   })();
 
-  // Pays ayant une couverture Google Street View connue (donc susceptibles
-  // d'apparaître réellement dans une partie GeoGuessr). Best-effort, basé
+  // Pays ayant une couverture Google Street View connue (donc susceptibles d'apparaître réellement en partie) — liste best-effort.
   const STREETVIEW_COVERED_COUNTRIES = new Set([
     'AX', 'AL', 'AS', 'AD', 'AR', 'AU', 'AT', 'BD', 'BY', 'BE', 'BM', 'BT', 'BO', 'BA', 'BW',
     'BR', 'BG', 'KH', 'CA', 'CL', 'CN', 'CO', 'CR', 'HR', 'CW', 'CY', 'CZ', 'DK', 'DO', 'EC',
@@ -1014,28 +958,22 @@
   // MODULE: roundHistory
   (function roundHistoryModule() {
     let warnedMapOnce = false;
-    // Clés (game_token:round_number) déjà enregistrées dans Supabase cette
-    // session — évite un doublon quand un round est réémis avec le score
+    // Clés (game_token:round_number) déjà enregistrées cette session — évite un doublon quand un round est réémis avec le score.
     const recordedRoundKeys = new Set();
     GeoCompanion.on('gameStart', () => recordedRoundKeys.clear());
 
     function extractRoundData(game) {
-      // Round toujours déjà présent ici : injecté explicitement par le hook
-      // WS pour le live challenge, natif pour les autres modes.
+      // Round toujours déjà présent ici : injecté explicitement par le hook WS pour le live challenge, natif pour les autres modes.
       const round = game.round ?? game.roundNumber ?? game.currentRoundNumber;
 
-      // Les infos du lieu réel du round sont généralement dans un tableau
-      // "rounds" indexé par (round - 1).
+      // Les infos du lieu réel du round sont généralement dans un tableau "rounds" indexé par (round - 1).
       const roundsInfo = game.rounds || [];
       const roundInfo = roundsInfo[round - 1] || {};
 
-      // Le guess le plus récent pour ce round.
       const guesses = game.player?.guesses || game.guesses || [];
       const guess = guesses[guesses.length - 1] || {};
 
-      // Live challenge : les coordonnées réelles sont imbriquées dans
-      // answer.coordinateAnswerPayload.coordinate — mais ce champ "answer"
-      // Duel : directement sur rounds[].panorama (confirmé par capture réseau réelle).
+      // Live challenge : coordonnées dans answer.coordinateAnswerPayload.coordinate ; duel : directement sur rounds[].panorama (confirmé par capture réseau).
       const actualLat =
         roundInfo.lat ??
         roundInfo.location?.lat ??
@@ -1050,21 +988,18 @@
         roundInfo.panorama?.lng;
       const guessLat = guess.lat ?? guess.position?.lat;
       const guessLng = guess.lng ?? guess.position?.lng;
-      // Pas de code pays direct en live challenge (juste des coordonnées) —
-      // sera résolu par reverse-geocoding dans le handler roundEnd si besoin.
+      // Pas de code pays direct en live challenge (juste des coordonnées) — résolu par reverse-geocoding dans le handler roundEnd si besoin.
       const actualCountryRaw =
         roundInfo.streakLocationCode ??
         roundInfo.countryCode ??
         roundInfo.question?.panoramaQuestionPayload?.panorama?.countryCode ??
         roundInfo.panorama?.countryCode ??
         null;
-      // Confirmé par capture réseau réelle : ce champ arrive en minuscule
-      // en live challenge ("gh", "br"...) alors que le reste du script (DB,
+      // Confirmé par capture réseau réelle : ce champ arrive en minuscule en live challenge ("gh", "br"...), d'où l'uppercase forcé.
       const actualCountry = actualCountryRaw ? actualCountryRaw.toUpperCase() : null;
 
 
-      // Live challenge : score/distance sont des valeurs directes sur le
-      // guess (guess.score, guess.distance), pas imbriquées comme en classique.
+      // Live challenge : score/distance sont des valeurs directes sur le guess (guess.score, guess.distance), pas imbriquées comme en classique.
       const score =
         guess.roundScoreInPoints ?? guess.score?.amount ?? (typeof guess.score === 'number' ? guess.score : null);
       const distanceMeters = guess.distanceInMeters ?? (typeof guess.distance === 'number' ? guess.distance : null);
@@ -1093,8 +1028,7 @@
     GeoCompanion.on('roundEnd', async (game) => {
       const row = extractRoundData(game);
 
-      // Warning séparé pour map_id (utile pour les stats par carte) — moins
-      // critique que les champs ci-dessus donc géré à part.
+      // Warning séparé pour map_id (utile pour les stats par carte) — moins critique que les champs ci-dessus donc géré à part.
       if (!warnedMapOnce && row.map_id == null) {
         warnedMapOnce = true;
         console.warn(
@@ -1107,8 +1041,7 @@
 
       console.log('[GeoCompanion] 📝 Enregistrement du round :', row);
 
-      // Certains modes (live challenge) ne fournissent pas le code pays réel
-      // directement, seulement des coordonnées — on le déduit alors par
+      // Certains modes (live challenge) ne fournissent pas le code pays réel directement, seulement des coordonnées à reverse-geocoder.
       if (!row.country_code && row.actual_lat != null && row.actual_lng != null) {
         const actualCountry = await reverseGeocodeCountry(row.actual_lat, row.actual_lng);
         if (actualCountry) {
@@ -1117,8 +1050,7 @@
         }
       }
 
-      // Priorité actuelle : trouver le pays et afficher tips/stats (stats
-      // vierges si rien en base) sans dépendre de la suite (reverse-geocoding
+      // Priorité : trouver le pays et afficher tips/stats sans dépendre de la suite (reverse-geocoding du guess, potentiellement plus lent).
       GeoCompanion.emit('roundRecorded', row);
 
       // Déduction du pays deviné via reverse-geocoding des coordonnées du guess.
@@ -1131,8 +1063,7 @@
               row.country_correct ? 'correct ✅' : 'incorrect ❌'
             }`
           );
-          // Le panneau est déjà affiché (roundRecorded émis plus haut, avant
-          // de connaître ce résultat) — on met juste à jour cette ligne
+          // Le panneau est déjà affiché (roundRecorded émis plus haut, avant de connaître ce résultat) — on met juste à jour cette ligne.
           GeoCompanion.emit('roundCorrectnessResolved', row);
         }
       }
@@ -1142,12 +1073,10 @@
         await supabaseClient.insert('profiles', { player_name: row.player_name }, { ignoreDuplicates: true });
       }
 
-      // On n'enregistre dans Supabase QUE lorsque le score est connu : soit
-      // directement ici si le joueur avait déjà guessé au moment du
+      // On n'enregistre dans Supabase QUE lorsque le score est connu, sinon on attend un roundEnd ultérieur avec le score.
       const recordKey = `${row.game_token}:${row.round_number}`;
       if (row.game_mode === 'duel') {
-        // Demande explicite : pas d'enregistrement en duel (uniquement
-        // l'affichage des tips), pas d'attente de score non plus.
+        // Demande explicite : pas d'enregistrement en duel (affichage des tips uniquement), pas d'attente de score non plus.
         console.log('[GeoCompanion] Duel : pas d\'enregistrement (pays uniquement).');
       } else if (row.score == null) {
         console.log('[GeoCompanion] ⏳ Score pas encore connu pour ce round — enregistrement différé.');
@@ -1165,8 +1094,7 @@
 
   // MODULE: stats
   (function statsModule() {
-    // Convertit un filterKey ('24h'|'7d'|'30d'|'all') en timestamp ISO,
-    // ou null pour 'all' (pas de filtre de date côté RPC).
+    // Convertit un filterKey ('24h'|'7d'|'30d'|'all') en timestamp ISO, ou null pour 'all' (pas de filtre de date côté RPC).
     function sinceTimestamp(filterKey) {
       if (filterKey === 'all') return null;
       const hoursByFilter = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
@@ -1175,8 +1103,7 @@
       return new Date(Date.now() - hours * 3600 * 1000).toISOString();
     }
 
-    // Convertit une ligne renvoyée par une RPC d'agrégat (snake_case,
-    // colonnes possiblement absentes) vers le format utilisé par l'UI.
+    // Convertit une ligne renvoyée par une RPC d'agrégat (snake_case, colonnes possiblement absentes) vers le format utilisé par l'UI.
     function toAggregateStats(row) {
       if (!row) return { count: 0, avgScore: null, bestScore: null, worstScore: null, successRate: null };
       return {
@@ -1200,8 +1127,7 @@
         .sort((a, b) => (b.avgScore ?? -1) - (a.avgScore ?? -1));
     }
 
-    // Stats groupées par pays (avec leur continent) pour un joueur donné —
-    // utilisé par le dashboard sur la page d'accueil. Filtré par joueur car
+    // Stats groupées par pays (avec continent) pour un joueur donné — utilisé par le dashboard de la page d'accueil.
     async function getAllCountryStats(playerName, filterKey = 'all') {
       const rows = await supabaseClient.rpc('get_all_country_stats', {
         p_player_name: playerName,
@@ -1213,8 +1139,7 @@
       for (const r of rows) {
         if (!r.country_code) continue;
         result[r.country_code] = {
-          // Fallback : les rounds enregistrés avant l'ajout de la colonne
-          // "continent" l'ont à null en base — recalculé à la volée dans ce cas.
+          // Fallback : les rounds enregistrés avant l'ajout de la colonne "continent" l'ont à null en base — recalculé à la volée.
           continent: r.continent || continentFromCountryCode(r.country_code),
           count: r.count,
           avgScore: r.avg_score != null ? Math.round(r.avg_score) : null,
@@ -1224,8 +1149,7 @@
       return result;
     }
 
-    // Combo fin de round : pays + continent + carte + comparaison en un
-    // seul appel réseau (au lieu de 4 requêtes séparées).
+    // Combo fin de round : pays + continent + carte + comparaison en un seul appel réseau (au lieu de 4 requêtes séparées).
     async function getRoundEndStats(countryCode, continent, mapId, filterKey = 'all') {
       const data = await supabaseClient.rpc('get_round_end_stats', {
         p_country_code: countryCode,
@@ -1242,8 +1166,7 @@
       };
     }
 
-    // Supprime les rounds d'un joueur correspondant au filtre temporel donné
-    // (même logique de date que les stats — filterKey 'all' supprime tout
+    // Même logique de date que les stats — filterKey 'all' supprime tout l'historique du joueur.
     async function deleteRoundsForPlayer(playerName, filterKey = 'all') {
       const since = sinceTimestamp(filterKey);
       const query =
@@ -1302,8 +1225,7 @@
 
   // MODULE: countryInfo
   (function countryInfoModule() {
-    // Retourne toutes les métadonnées d'un pays en une seule requête,
-    // telles que stockées en base (valeurs déjà seedées ou corrigées).
+    // Retourne toutes les métadonnées d'un pays en une seule requête, telles que stockées en base.
     async function getCountryInfo(countryCode) {
       if (!countryCode) return {};
       const upper = countryCode.toUpperCase();
@@ -1314,8 +1236,7 @@
       return (rows && rows[0]) || {};
     }
 
-    // Setter multi-champs : sauvegarde plusieurs colonnes de country_info
-    // en un seul appel (utile pour les champs composites comme "voiture").
+    // Setter multi-champs : sauvegarde plusieurs colonnes en un seul appel (utile pour les champs composites comme "voiture").
     async function setCountryInfoFields(countryCode, fields) {
       if (!countryCode) return false;
       return supabaseClient.insert(
@@ -1345,8 +1266,7 @@
       { key: 'all', label: 'Total' },
     ];
 
-    // Empêche les touches tapées dans un champ de saisie de remonter vers
-    // GeoGuessr (qui a des raccourcis clavier globaux sur certaines lettres).
+    // Empêche les touches tapées ici de remonter vers GeoGuessr (raccourcis clavier globaux sur certaines lettres).
     function stopKeyPropagation(el) {
       ['keydown', 'keyup', 'keypress'].forEach((evt) => {
         el.addEventListener(evt, (e) => e.stopPropagation());
@@ -1361,8 +1281,7 @@
       }
     }
 
-    // Noms raccourcis pour les affichages compacts (ex: dashboard en grille
-    // serrée) — seuls les noms français les plus longs sont couverts.
+    // Noms raccourcis pour les affichages compacts (dashboard en grille serrée) — seuls les noms français les plus longs sont couverts.
     const SHORT_COUNTRY_NAMES = {
       AE: 'Émirats A.U.',
       BA: 'Bosnie-Herz.',
@@ -1385,8 +1304,7 @@
       return SHORT_COUNTRY_NAMES[code.toUpperCase()] || countryNameFromCode(code);
     }
 
-    // Domaine internet (ccTLD) du pays. Dans la grande majorité des cas, ça
-    // correspond directement au code ISO en minuscule — quelques exceptions
+    // Domaine internet (ccTLD) du pays : correspond en général au code ISO en minuscule, quelques exceptions ci-dessous.
     const TLD_OVERRIDES = {
       GB: 'uk', // le Royaume-Uni utilise .uk et non .gb
     };
@@ -1397,19 +1315,16 @@
       return `.${TLD_OVERRIDES[upper] || upper.toLowerCase()}`;
     }
 
-    // Convertit un code pays ISO 2 lettres en <img> de drapeau via flagcdn.com
-    // (gratuit, pas de clé). On utilisait un emoji drapeau Unicode avant,
+    // Convertit un code pays ISO en <img> de drapeau via flagcdn.com (gratuit, sans clé) — remplace l'ancien rendu en emoji Unicode.
     function flagImgFromCode(code, { height = '1em', className = '' } = {}) {
       if (!code || code.length !== 2) return '';
       const lower = code.toLowerCase();
       return `<img src="https://flagcdn.com/${lower}.svg" alt="${code.toUpperCase()}" class="gc-flag-img ${className}" style="height:${height};" onerror="this.style.visibility='hidden'">`;
     }
 
-    // Déduit l'URL de la page pays sur plonkit.net à partir du nom anglais
-    // (ex: "United States" -> "united-states"). Best-effort : plonkit ne suit
+    // Déduit l'URL plonkit.net à partir du nom anglais (ex: "United States" -> "united-states") — best-effort, la slugification ne suit pas toujours leurs URLs réelles.
     const PLONKIT_SLUG_OVERRIDES = {
-      // code ISO (majuscule) -> slug plonkit, pour les cas où la conversion
-      // automatique du nom anglais ne matche pas l'URL réelle.
+      // code ISO (majuscule) -> slug plonkit, pour les cas où la conversion automatique ne matche pas.
     };
 
     function plonkitUrlFromCode(code) {
@@ -1452,8 +1367,7 @@
         panel.className = 'gc-panel gc-tips-panel';
         document.body.appendChild(panel);
 
-        // Listener délégué unique (le panneau persiste entre les re-renders) :
-        // clique sur n'importe quelle image marquée data-lightbox pour la
+        // Listener délégué unique (le panneau persiste entre les re-renders) : clic sur toute image data-lightbox pour l'agrandir.
         panel.addEventListener('click', (e) => {
           const img = e.target.closest('img[data-lightbox]');
           if (img) openImageLightbox(img.src);
@@ -1498,8 +1412,7 @@
       `;
     }
 
-    // Génère le HTML commun (rounds/score moyen/meilleur/pire/réussite) à
-    // partir d'un objet stats — réutilisé pour pays/continent/carte.
+    // Génère le HTML commun (rounds/score moyen/meilleur/pire/réussite) — réutilisé pour pays/continent/carte.
     function aggregateStatsHtml(stats) {
       if (stats.count === 0) return 'Aucune donnée pour cette période.';
       return `
@@ -1532,14 +1445,12 @@
         btn.addEventListener('click', () => renderStats(row, btn.dataset.filter, cache));
       });
 
-      // Cache par filtre temporel : changer de filtre puis revenir dessus ne
-      // refait pas d'appel réseau. Le cache est propre à ce round affiché
+      // Cache par filtre temporel, propre à ce round affiché : changer de filtre puis revenir dessus ne refait pas d'appel réseau.
       let stats;
       if (cache.has(activeFilter)) {
         stats = cache.get(activeFilter);
       } else {
-        // Un seul appel réseau pour pays + continent + carte + comparaison,
-        // au lieu de 4 requêtes séparées (économise de la bande passante).
+        // Un seul appel réseau pour pays + continent + carte + comparaison (au lieu de 4 requêtes séparées).
         stats = await GeoCompanion.stats.getRoundEndStats(row.country_code, row.continent, row.map_id, activeFilter);
         cache.set(activeFilter, stats);
       }
@@ -1777,8 +1688,7 @@
       return 'Inconnu';
     }
 
-    // Champ "Route" composite : texte + image + sens de circulation,
-    // affiché à côté du champ Voiture.
+    // Champ "Route" composite : texte + image + sens de circulation, affiché à côté du champ Voiture.
     function renderRouteField(tipsPanel, row, info) {
       const container = tipsPanel.querySelector('#geo-companion-route-field');
       if (!container) return;
@@ -1863,8 +1773,7 @@
       });
     }
 
-    // Champs d'identification par pays : plaque/bollard/poteau (photos) et
-    // langue (texte). "Voiture" a son propre rendu composite juste en
+    // Champs d'identification par pays : plaque/bollard/poteau (photos) et langue (texte) — "Voiture" a son propre rendu composite plus bas.
     const COUNTRY_INFO_FIELDS = [
       { key: 'plaque_image_url', label: 'Plaque', type: 'image' },
       { key: 'bollard_image_url', label: 'Bollard', type: 'image' },
@@ -1895,7 +1804,7 @@
       }
       const highlightClass = fieldConfig.key === 'langue_text' ? 'gc-field-highlight' : '';
       if (fieldConfig.type === 'multitext') {
-        // white-space:pre-line préserve les retours à la ligne saisis (une
+        // white-space:pre-line préserve les retours à la ligne saisis (une langue par ligne).
         return `<span class="gc-pre-line ${highlightClass}">${escapeHtml(value)}</span>`;
       }
       return `<span class="${highlightClass}">${escapeHtml(value)}</span>`;
@@ -1983,8 +1892,7 @@
       });
     }
 
-    // Champ "Voiture" composite : texte + image + case "exclusif au pays".
-    // Séparé du système générique car il combine 3 colonnes en une carte.
+    // Champ "Voiture" composite (texte + image + case "exclusif au pays"), séparé du système générique car il combine 3 colonnes en une carte.
     function renderVoitureField(tipsPanel, row, info) {
       const container = tipsPanel.querySelector('#geo-companion-voiture-field');
       if (!container) return;
@@ -2063,16 +1971,14 @@
       });
     }
 
-    // Affiche le résultat d'un round (panneau principal + tips + bouton
-    // stats) — factorisé pour être réutilisable à la fois depuis l'event
+    // Affiche le résultat d'un round (panneau principal + tips + bouton stats) — factorisé pour être réutilisable depuis plusieurs events.
     async function displayRoundResult(row) {
       const panel = ensurePanel();
       panel.classList.toggle('gc-panel--duel-offset', row.game_mode === 'duel');
       renderRoundResult(panel, row);
       await renderTips(row);
 
-      // Les stats ne sont chargées (et donc aucune requête Supabase envoyée)
-      // que si l'utilisateur clique explicitement sur le bouton — évite une
+      // Les stats (et donc la requête Supabase) ne sont chargées que si l'utilisateur clique explicitement sur le bouton.
       const statsCache = new Map(); // propre à cet affichage de round
       const toggleBtn = document.getElementById('geo-companion-toggle-stats-btn');
       const statsSection = document.getElementById('geo-companion-stats-section');
@@ -2095,16 +2001,12 @@
       }
     }
 
-    // Persiste quel round est actuellement affiché (ou "aucun"), pour
-    // pouvoir restaurer l'affichage si la page est rechargée entre la fin
+    // Persiste quel round est actuellement affiché (ou "aucun"), pour restaurer l'affichage si la page est rechargée entre la fin d'un round et le suivant.
     const LAST_DISPLAY_KEY = 'geoCompanion_lastRoundDisplay';
 
     GeoCompanion.on('gameStart', () => {
       GM_setValue(LAST_DISPLAY_KEY, { row: null, visible: false });
-      // Filet de sécurité : si on enchaîne directement d'une partie à une
-      // autre (ex: duel après un live challenge) sans repasser par une page
-      // hors partie, checkHomepage() ne voit jamais la transition — on
-      // masque donc aussi ici, sur tout nouveau démarrage de partie.
+      // Filet de sécurité : si on enchaîne directement d'une partie à une autre sans repasser par une page hors partie, checkHomepage() ne voit jamais la transition.
       if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
     });
 
@@ -2117,14 +2019,12 @@
         await displayRoundResult(row);
         GM_setValue(LAST_DISPLAY_KEY, { row, visible: true });
       } catch (e) {
-        // GeoCompanion.emit ne rattrape que les erreurs SYNCHRONES de ses
-        // listeners — un throw dans un listener async (comme celui-ci)
+        // GeoCompanion.emit ne rattrape que les erreurs SYNCHRONES de ses listeners, pas un throw dans un listener async comme celui-ci.
         console.error('[GeoCompanion] Erreur lors de l\'affichage du résultat du round :', e, row);
       }
     });
 
-    // Le pays deviné (✅/❌) est résolu après coup, une fois le panneau déjà
-    // affiché (voir roundHistoryModule) — on patch juste cette ligne plutôt
+    // Le pays deviné (✅/❌) est résolu après coup, une fois le panneau déjà affiché (voir roundHistoryModule) — on patch juste cette ligne.
     GeoCompanion.on('roundCorrectnessResolved', (row) => {
       const line = document.getElementById('geo-companion-result-line');
       if (!line) return; // panneau plus affiché (round suivant déjà démarré) : rien à mettre à jour
@@ -2132,8 +2032,7 @@
       GM_setValue(LAST_DISPLAY_KEY, { row, visible: true });
     });
 
-    // Retire les panneaux résultat/tips et oublie l'affichage persisté.
-    // Exposé sur GeoCompanion pour être réutilisable depuis d'autres modules
+    // Retire les panneaux résultat/tips et oublie l'affichage persisté — exposé sur GeoCompanion pour être réutilisable depuis d'autres modules.
     GeoCompanion.hideResultAndTipsPanels = function () {
       const panel = document.getElementById(PANEL_ID);
       if (panel) panel.remove();
@@ -2142,20 +2041,14 @@
       GM_setValue(LAST_DISPLAY_KEY, { row: null, visible: false });
     };
 
-    // Les panneaux résultat/tips n'ont d'intérêt qu'une fois le round terminé
-    // (pays révélé) — on les retire au début du round suivant pour ne pas
+    // Les panneaux résultat/tips n'ont d'intérêt qu'une fois le round terminé (pays révélé) — retirés au début du round suivant.
     GeoCompanion.on('roundStart', () => {
       GeoCompanion.hideResultAndTipsPanels();
     });
 
-    // Pas de masquage sur gameEnd ici : cet event se déclenche en pratique
-    // au moment où le DERNIER round se termine (quasi simultané avec son
+    // Pas de masquage sur gameEnd ici : cet event se déclenche quasi simultanément avec le roundEnd du dernier round.
 
-    // Restauration au chargement du script : si la page est rechargée juste
-    // après la fin d'un round (avant le round suivant), on réaffiche
-    // — seulement si on est encore sur une page de jeu : sinon (rechargement
-    // complet vers une page sans rapport après avoir quitté une partie), les
-    // panneaux réapparaîtraient à tort sur cette page.
+    // Restauration au chargement : si la page est rechargée juste après un round, on réaffiche — seulement si encore sur une page de jeu, sinon les panneaux réapparaîtraient à tort ailleurs.
     const lastDisplay = GM_getValue(LAST_DISPLAY_KEY, null);
     if (lastDisplay?.visible && lastDisplay.row && isGameplayUrl(pageWindow.location.pathname)) {
       displayRoundResult(lastDisplay.row);
@@ -2168,8 +2061,7 @@
     let dashboardActiveFilter = 'all';
     let dashboardCollapsed = false; // conservé entre les re-rendus (changement de filtre/continent)
 
-    // Cache en mémoire des stats par filtre temporel : changer d'onglet
-    // continent ne change pas la requête sous-jacente (déjà tout récupéré
+    // Cache en mémoire des stats par filtre temporel : changer d'onglet continent ne refait pas de requête (déjà tout récupéré côté serveur).
     const dashboardStatsCache = new Map();
 
     function isHomepage() {
@@ -2177,8 +2069,7 @@
       return /^\/([a-z]{2})?\/?$/i.test(pageWindow.location.pathname);
     }
 
-    // URL qui correspond à une partie en cours (classique, challenge, live
-    // challenge, battle royale, duels...), écran de résultats/leaderboard
+    // URL qui correspond à une partie en cours (classique, challenge, live challenge, battle royale, duels...) ou son écran de résultats.
     function isGameplayUrl(pathname) {
       return /\/(game|live-challenge|challenge|battle-royale|duels?)\//i.test(pathname);
     }
@@ -2203,8 +2094,7 @@ function ensureDashboard() {
   return panel;
 }
 
-    // Couleur pleine (bordure) et lavée (fond) selon le taux de réussite :
-    // interpolation entre leur vrai rouge et leur vrai vert (design system
+    // Couleur pleine (bordure) et lavée (fond) selon le taux de réussite : interpolation entre le rouge et le vert du design system GeoGuessr.
     function hexToRgb(hex) {
       const n = parseInt(hex.replace('#', ''), 16);
       return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
@@ -2221,14 +2111,12 @@ function ensureDashboard() {
       return { solid: `rgb(${r}, ${g}, ${b})`, wash: `rgba(${r}, ${g}, ${b}, 0.18)` };
     }
 
-    // Construit et affiche la liste des pays à partir de stats déjà chargées
-    // (aucune requête réseau ici — c'est le rôle de renderDashboard/du bouton
+    // Construit et affiche la liste des pays à partir de stats déjà chargées (aucune requête réseau ici, voir loadDashboardFilterData).
     function renderDashboardCountryList(allStats) {
       const listEl = document.getElementById('geo-companion-dashboard-list');
       if (!listEl) return;
 
-      // Pas de continent sélectionné (désélectionné en recliquant dessus) :
-      // on affiche tous les pays, tous continents confondus.
+      // Pas de continent sélectionné (désélectionné en recliquant dessus) : on affiche tous les pays, tous continents confondus.
       const allCodesForContinent = dashboardActiveContinent
         ? COUNTRIES_BY_CONTINENT[dashboardActiveContinent] || []
         : Object.values(COUNTRIES_BY_CONTINENT).flat();
@@ -2240,12 +2128,10 @@ function ensureDashboard() {
           successRate: null,
           ...allStats[code], // écrase les valeurs par défaut si des stats existent
         }))
-        // un pays jamais joué n'a d'intérêt à afficher que s'il a une
-        // couverture Street View connue (sinon il n'apparaîtra jamais en
+        // un pays jamais joué n'a d'intérêt à afficher que s'il a une couverture Street View connue (sinon il n'apparaîtra jamais en partie).
         .filter((c) => c.count > 0 || STREETVIEW_COVERED_COUNTRIES.has(c.code))
         .sort((a, b) => {
-          // pays joués d'abord (triés par taux de réussite décroissant), puis
-          // pays jamais joués, triés par nom.
+          // pays joués d'abord (triés par taux de réussite décroissant), puis pays jamais joués, triés par nom.
           if (a.count === 0 && b.count === 0) return countryNameFromCode(a.code).localeCompare(countryNameFromCode(b.code));
           if (a.count === 0) return 1;
           if (b.count === 0) return -1;
@@ -2281,8 +2167,7 @@ function ensureDashboard() {
       `;
     }
 
-    // Affiche l'état vide + bouton "Actualiser" : aucune requête Supabase
-    // n'est envoyée tant que l'utilisateur n'a pas cliqué dessus.
+    // Aucune requête Supabase envoyée tant que l'utilisateur n'a pas cliqué sur "Actualiser" (voir renderDashboardEmptyState).
     async function loadDashboardFilterData(playerName) {
       if (!playerName) return;
       if (dashboardStatsCache.has(dashboardActiveFilter)) {
@@ -2397,16 +2282,14 @@ function ensureDashboard() {
         btn.addEventListener('click', () => {
           dashboardActiveFilter = btn.dataset.dashFilter;
           renderDashboard();
-          // Un clic sur un filtre est une demande explicite pour cette
-          // période : on charge depuis le cache s'il existe, sinon on va
+          // Un clic sur un filtre est une demande explicite pour cette période : on charge depuis le cache s'il existe, sinon en réseau.
           loadDashboardFilterData(playerName);
         });
       });
       panel.querySelectorAll('[data-dash-continent]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const clicked = btn.dataset.dashContinent;
-          // Un clic sur le continent déjà actif le désélectionne (affiche
-          // tous les pays, tous continents confondus) plutôt que de rester
+          // Un clic sur le continent déjà actif le désélectionne (affiche tous les pays, tous continents confondus).
           dashboardActiveContinent = dashboardActiveContinent === clicked ? null : clicked;
           renderDashboard();
         });
@@ -2418,8 +2301,7 @@ function ensureDashboard() {
         return;
       }
 
-      // Aucune requête Supabase envoyée ici : on affiche le cache s'il existe
-      // pour ce filtre, sinon un état vide avec bouton "Actualiser" — c'est
+      // Aucune requête Supabase envoyée ici : on affiche le cache s'il existe pour ce filtre, sinon un état vide avec bouton "Actualiser".
       if (dashboardStatsCache.has(dashboardActiveFilter)) {
         renderDashboardCountryList(dashboardStatsCache.get(dashboardActiveFilter));
       } else {
@@ -2431,13 +2313,11 @@ function ensureDashboard() {
       const nowInGameplayUrl = isGameplayUrl(pageWindow.location.pathname);
       if (isHomepage()) {
         renderDashboard();
-        // Filet de sécurité : en live challenge, la fin de partie/round
-        // n'est pas toujours détectée de façon fiable (voir apiDetectionModule),
+        // Filet de sécurité : en live challenge, la fin de partie/round n'est pas toujours détectée de façon fiable (voir apiDetectionModule).
         if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
       } else {
         removeDashboard();
-        // Complète le filet ci-dessus pour le cas où le joueur quitte la
-        // partie vers une page qui n'est ni l'accueil ni une page de jeu
+        // Complète le filet ci-dessus pour le cas où le joueur quitte la partie vers une page qui n'est ni l'accueil ni une page de jeu.
         if (wasInGameplayUrl && !nowInGameplayUrl && GeoCompanion.hideResultAndTipsPanels) {
           GeoCompanion.hideResultAndTipsPanels();
         }
@@ -2445,8 +2325,7 @@ function ensureDashboard() {
       wasInGameplayUrl = nowInGameplayUrl;
     }
 
-    // Filet de sécurité indépendant du routing : dès qu'une partie démarre
-    // (détecté de façon fiable via l'interception réseau, pas via l'URL),
+    // Filet de sécurité indépendant du routing : dès qu'une partie démarre (détecté via l'interception réseau, pas via l'URL).
     GeoCompanion.on('gameStart', removeDashboard);
 
     // Un nouveau round enregistré rend les stats du dashboard obsolètes.
@@ -2454,8 +2333,7 @@ function ensureDashboard() {
       dashboardStatsCache.clear();
     });
 
-    // Détection de navigation SPA : GeoGuessr ne recharge pas la page à
-    // chaque clic, donc on intercepte pushState/replaceState/popstate (même
+    // Détection de navigation SPA : GeoGuessr ne recharge pas la page à chaque clic, donc on intercepte pushState/replaceState/popstate.
     const originalPushState = pageWindow.history.pushState;
     pageWindow.history.pushState = function (...args) {
       const result = originalPushState.apply(this, args);
@@ -2472,8 +2350,7 @@ function ensureDashboard() {
 
     pageWindow.addEventListener('popstate', () => setTimeout(checkHomepage, 300));
 
-    // Vérification initiale (script chargé directement sur l'accueil, ou en
-    // cours de partie après un refresh).
+    // Vérification initiale (script chargé directement sur l'accueil, ou en cours de partie après un refresh).
     checkHomepage();
   })();
 

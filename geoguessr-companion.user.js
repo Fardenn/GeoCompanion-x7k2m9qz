@@ -92,7 +92,7 @@
         padding: 16px;
         font-family: var(--gc-font);
         z-index: 1;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        box-shadow: 0 10px 34px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
         line-height: 1.4;
         box-sizing: border-box;
       }
@@ -123,6 +123,7 @@
         text-transform: capitalize;
         text-shadow: var(--text-shadow, none);
         padding: 6px 10px;
+        transition: filter 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease, background 0.15s ease;
       }
       .gc-btn:disabled { opacity: 0.6; cursor: default; }
       .gc-btn--flex { flex: 1; }
@@ -158,7 +159,14 @@
       .gc-btn-row--wrap { flex-wrap: wrap; }
 
       /* ==== Cartes ==== */
-      .gc-card { background: var(--gc-bg-secondary); border-radius: 6px; padding: 7px 9px; font-size: 15px; }
+      .gc-card {
+        background: var(--gc-bg-secondary);
+        border-radius: 6px;
+        padding: 7px 9px;
+        font-size: 15px;
+        border: 1px solid transparent;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+      }
       .gc-card-header { display: flex; justify-content: space-between; align-items: center; }
 
       /* ==== Formulaires ==== */
@@ -166,13 +174,19 @@
         width: 100%;
         margin-top: 4px;
         border-radius: 4px;
-        border: none;
+        border: 1px solid transparent;
         padding: 6px;
         box-sizing: border-box;
         background: #1a1a28;
         color: white;
         font-family: var(--gc-font);
         font-size: 15px;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .gc-input:focus {
+        outline: none;
+        border-color: var(--gc-accent);
+        box-shadow: 0 0 0 2px rgba(121, 80, 229, 0.3);
       }
       .gc-input--compact { font-size: 13px; padding: 4px; }
       textarea.gc-input { resize: vertical; }
@@ -292,7 +306,18 @@
       .gc-nowrap-ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .gc-tip-image { width: 100%; max-height: 300px; object-fit: contain; }
       .gc-tip-card { border-radius: 8px; font-size: 16px; }
-      .gc-country-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 10px; overflow: hidden; border-left: 4px solid transparent; }
+      .gc-country-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 10px;
+        border-radius: 10px;
+        overflow: hidden;
+        border-left: 4px solid transparent;
+        transition: transform 0.12s ease, box-shadow 0.15s ease;
+      }
+      .gc-country-row:hover { transform: translateX(2px); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); }
       .gc-field-highlight { font-weight: bold; font-size: 22px; }
       .gc-driving-btn { padding: 4px; font-size: 11px; background: var(--gc-bg-secondary-hover); }
       .gc-driving-btn--active { background: var(--gc-accent-gradient); }
@@ -320,6 +345,37 @@
       .gc-no-clue-icon { font-size: 16px; filter: grayscale(1); opacity: 0.8; }
       .gc-btn--toggle-no-clue { background: none; padding: 2px 4px; font-size: 14px; color: var(--gc-muted, #999); opacity: 0.7; }
       .gc-btn--toggle-no-clue--active { color: var(--gc-danger); opacity: 1; }
+
+      /* ==== Polish : ombres, hover, transitions (boutons/cartes/images) ==== */
+      .gc-btn:not(:disabled):hover { filter: brightness(1.15); }
+      .gc-btn:not(:disabled):active { transform: scale(0.96); }
+      .gc-btn--primary:not(:disabled):hover,
+      .gc-btn--jouer:not(:disabled):hover,
+      .gc-btn--ok:not(:disabled):hover {
+        box-shadow: 0 4px 16px rgba(121, 80, 229, 0.45);
+        transform: translateY(-1px);
+      }
+      .gc-btn--secondary:not(:disabled):hover,
+      .gc-btn--cancel:not(:disabled):hover,
+      .gc-driving-btn:not(:disabled):hover {
+        background: var(--ds-color-purple-70, #4a2399);
+      }
+      .gc-icon-btn:hover,
+      .gc-btn--edit-tip:hover,
+      .gc-btn--toggle-no-clue:hover {
+        transform: scale(1.18);
+        filter: brightness(1.3);
+      }
+      .gc-btn--delete-tip:hover,
+      .gc-btn--delete-dash:hover {
+        filter: brightness(1.25);
+        transform: scale(1.08);
+      }
+      .gc-card:hover:not(.gc-country-row):not(.gc-comparison-row) {
+        border-color: rgba(121, 80, 229, 0.35);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      }
+      .gc-img:hover { filter: brightness(1.1); }
 
       .gc-toast {
         position: fixed;

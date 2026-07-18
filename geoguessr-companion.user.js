@@ -2092,7 +2092,15 @@
     // Persiste quel round est actuellement affiché (ou "aucun"), pour restaurer l'affichage si la page est rechargée entre la fin d'un round et le suivant.
     const LAST_DISPLAY_KEY = 'geoCompanion_lastRoundDisplay';
 
+    // Vrai dès que gameEnd est émis (fin de partie/duel) — évite qu'un roundRecorded encore en cours de traitement (reverse-geocoding async)
+    // ne fasse réapparaître un panneau après coup, alors que hideResultAndTipsPanels a déjà été appelé (ex: DuelFinished).
+    let gameFinished = false;
+    GeoCompanion.on('gameEnd', () => {
+      gameFinished = true;
+    });
+
     GeoCompanion.on('gameStart', () => {
+      gameFinished = false;
       GM_setValue(LAST_DISPLAY_KEY, { row: null, visible: false });
       // Filet de sécurité : si on enchaîne directement d'une partie à une autre sans repasser par une page hors partie, checkHomepage() ne voit jamais la transition.
       if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
@@ -2103,8 +2111,19 @@
         console.log('[GeoCompanion] roundRecorded reçu sans country_code, rien à afficher.', row);
         return; // pas de pays détecté, rien d'exploitable à afficher
       }
+      if (gameFinished) {
+        // La partie/duel s'est déjà terminée avant même de commencer l'affichage (traitement du dernier round trop lent) — rien à montrer.
+        console.log('[GeoCompanion] roundRecorded reçu après la fin de la partie, panneau ignoré.', row);
+        return;
+      }
       try {
         await displayRoundResult(row);
+        if (gameFinished) {
+          // La partie/duel s'est terminée PENDANT l'affichage (ex: DuelFinished arrivé pendant le reverse-geocoding) —
+          // on ne laisse pas un résultat obsolète/vide affiché sans qu'aucun event ultérieur ne vienne le cacher.
+          GeoCompanion.hideResultAndTipsPanels();
+          return;
+        }
         GM_setValue(LAST_DISPLAY_KEY, { row, visible: true });
       } catch (e) {
         // GeoCompanion.emit ne rattrape que les erreurs SYNCHRONES de ses listeners, pas un throw dans un listener async comme celui-ci.

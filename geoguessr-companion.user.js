@@ -297,6 +297,30 @@
       .gc-driving-btn { padding: 4px; font-size: 11px; background: var(--gc-bg-secondary-hover); }
       .gc-driving-btn--active { background: var(--gc-accent-gradient); }
 
+      /* ==== État "pas d'indice dans cette catégorie" (distinct de "non renseigné") ==== */
+      .gc-card--no-clue {
+        background: repeating-linear-gradient(
+          135deg,
+          rgba(255, 255, 255, 0.04),
+          rgba(255, 255, 255, 0.04) 8px,
+          rgba(0, 0, 0, 0.12) 8px,
+          rgba(0, 0, 0, 0.12) 16px
+        ), var(--gc-bg-secondary);
+        opacity: 0.6;
+      }
+      .gc-no-clue-content {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 0;
+        opacity: 0.85;
+        font-style: italic;
+        color: var(--gc-danger);
+      }
+      .gc-no-clue-icon { font-size: 16px; filter: grayscale(1); opacity: 0.8; }
+      .gc-btn--toggle-no-clue { background: none; padding: 2px 4px; font-size: 14px; color: var(--gc-muted, #999); opacity: 0.7; }
+      .gc-btn--toggle-no-clue--active { color: var(--gc-danger); opacity: 1; }
+
       .gc-toast {
         position: fixed;
         bottom: 20px;
@@ -1264,6 +1288,13 @@
       { key: 'all', label: 'Total' },
     ];
 
+    // Marqueur stocké en base pour distinguer "pas d'indice dans cette catégorie" (volontaire, vérifié) de "non renseigné" (juste pas encore fait).
+    // Chaîne texte normale (pas de caractère de contrôle) : Postgres rejette les octets NUL (\u0000) dans les colonnes texte.
+    const NO_CLUE_MARKER = '__GC_NO_CLUE__';
+    function isNoClue(value) {
+      return value === NO_CLUE_MARKER;
+    }
+
     // Empêche les touches tapées ici de remonter vers GeoGuessr (raccourcis clavier globaux sur certaines lettres).
     function stopKeyPropagation(el) {
       ['keydown', 'keyup', 'keypress'].forEach((evt) => {
@@ -1691,17 +1722,25 @@
       const container = tipsPanel.querySelector('#geo-companion-route-field');
       if (!container) return;
 
-      const hasContent = info.route_text || info.route_image_url;
+      const noClue = isNoClue(info.route_text);
+      const hasContent = !noClue && (info.route_text || info.route_image_url);
 
       container.innerHTML = `
-        <div class="gc-card gc-h-full-border">
+        <div class="gc-card gc-h-full-border ${noClue ? 'gc-card--no-clue' : ''}">
           <div class="gc-card-header">
             <span class="gc-label">Route 🚗 ${drivingSideLabel(info.driving_side)}</span>
-            <button data-edit-route class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
+            <div class="gc-flex-gap-6">
+              <button data-toggle-no-clue-route class="gc-btn gc-btn--toggle-no-clue ${
+                noClue ? 'gc-btn--toggle-no-clue--active' : ''
+              }" title="${noClue ? 'Annuler : pas d’indice' : 'Marquer : pas d’indice dans cette catégorie'}">🚫</button>
+              <button data-edit-route class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
+            </div>
           </div>
           <div data-route-display class="gc-mt-2">
             ${
-              hasContent
+              noClue
+                ? `<div class="gc-no-clue-content"><span class="gc-no-clue-icon">🚫</span>Pas d'indice dans cette catégorie</div>`
+                : hasContent
                 ? `
               ${info.route_text ? `<div>${escapeHtml(info.route_text)}</div>` : ''}
               ${
@@ -1717,11 +1756,24 @@
         </div>
       `;
 
+      container.querySelector('[data-toggle-no-clue-route]').addEventListener('click', async () => {
+        if (noClue) {
+          await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, { route_text: null });
+        } else {
+          await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, {
+            route_text: NO_CLUE_MARKER,
+            route_image_url: null,
+          });
+        }
+        const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
+        renderRouteField(tipsPanel, row, updated);
+      });
+
       container.querySelector('[data-edit-route]').addEventListener('click', () => {
         const formEl = container.querySelector('[data-route-form]');
         formEl.innerHTML = `
           <input type="text" data-route-text value="${escapeHtml(
-            info.route_text || ''
+            noClue ? '' : info.route_text || ''
           )}" placeholder="Texte (marquage, bornes...)" class="gc-input gc-input--compact">
           <input type="text" data-route-image value="${escapeHtml(
             info.route_image_url || ''
@@ -1780,6 +1832,9 @@
     ];
 
     function countryInfoFieldDisplay(fieldConfig, value) {
+      if (isNoClue(value)) {
+        return `<div class="gc-no-clue-content"><span class="gc-no-clue-icon">🚫</span>Pas d'indice</div>`;
+      }
       if (!value) {
         return `<span class="gc-muted-light">Non renseigné</span>`;
       }
@@ -1814,30 +1869,43 @@
 
       container.innerHTML = `
         <div class="gc-grid-2">
-          ${COUNTRY_INFO_FIELDS.map(
-            (f) => `
-            <div class="gc-card ${f.fullWidth ? 'gc-span-2' : ''}">
+          ${COUNTRY_INFO_FIELDS.map((f) => {
+            const noClue = isNoClue(info[f.key]);
+            return `
+            <div class="gc-card ${f.fullWidth ? 'gc-span-2' : ''} ${noClue ? 'gc-card--no-clue' : ''}">
               <div class="gc-card-header">
                 <span class="gc-label">${f.label}</span>
-                <button data-edit-field="${f.key}" class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
+                <div class="gc-flex-gap-6">
+                  <button data-toggle-no-clue="${f.key}" class="gc-btn gc-btn--toggle-no-clue ${
+              noClue ? 'gc-btn--toggle-no-clue--active' : ''
+            }" title="${noClue ? 'Annuler : pas d’indice' : 'Marquer : pas d’indice dans cette catégorie'}">🚫</button>
+                  <button data-edit-field="${f.key}" class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
+                </div>
               </div>
-              <div data-field-display="${f.key}" class="gc-mt-2">${countryInfoFieldDisplay(
-                f,
-                info[f.key]
-              )}</div>
+              <div data-field-display="${f.key}" class="gc-mt-2">${countryInfoFieldDisplay(f, info[f.key])}</div>
               <div data-field-form="${f.key}"></div>
             </div>
-          `
-          ).join('')}
+          `;
+          }).join('')}
         </div>
       `;
+
+      container.querySelectorAll('[data-toggle-no-clue]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const key = btn.dataset.toggleNoClue;
+          const newValue = isNoClue(info[key]) ? null : NO_CLUE_MARKER;
+          await GeoCompanion.countryInfo.setCountryInfoField(row.country_code, key, newValue);
+          const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
+          renderCountryInfoFields(tipsPanel, row, updated);
+        });
+      });
 
       container.querySelectorAll('[data-edit-field]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const key = btn.dataset.editField;
           const fieldConfig = COUNTRY_INFO_FIELDS.find((f) => f.key === key);
           const formEl = container.querySelector(`[data-field-form="${key}"]`);
-          const currentValue = info[key] || '';
+          const currentValue = isNoClue(info[key]) ? '' : info[key] || '';
           const isMultiUrl = fieldConfig.type === 'images'; // liste d'URLs (une par ligne, nettoyées)
           const isFreeText = fieldConfig.type === 'multitext'; // texte libre multi-lignes (ex: langue)
           const isTextarea = isMultiUrl || isFreeText;
@@ -1895,7 +1963,8 @@
       const container = tipsPanel.querySelector('#geo-companion-voiture-field');
       if (!container) return;
 
-      const hasContent = info.voiture_text || info.voiture_image_url;
+      const noClue = isNoClue(info.voiture_text);
+      const hasContent = !noClue && (info.voiture_text || info.voiture_image_url);
       const exclusiveBadge =
         info.voiture_exclusive === true
           ? '<span class="gc-opacity-8">🔒 Exclusif au pays</span>'
@@ -1904,14 +1973,21 @@
           : '';
 
       container.innerHTML = `
-        <div class="gc-card">
+        <div class="gc-card ${noClue ? 'gc-card--no-clue' : ''}">
           <div class="gc-card-header">
             <span class="gc-label">Voiture</span>
-            <button data-edit-voiture class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
+            <div class="gc-flex-gap-6">
+              <button data-toggle-no-clue-voiture class="gc-btn gc-btn--toggle-no-clue ${
+                noClue ? 'gc-btn--toggle-no-clue--active' : ''
+              }" title="${noClue ? 'Annuler : pas d’indice' : 'Marquer : pas d’indice dans cette catégorie'}">🚫</button>
+              <button data-edit-voiture class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
+            </div>
           </div>
           <div data-voiture-display class="gc-mt-2">
             ${
-              hasContent
+              noClue
+                ? `<div class="gc-no-clue-content"><span class="gc-no-clue-icon">🚫</span>Pas d'indice dans cette catégorie</div>`
+                : hasContent
                 ? `
               ${info.voiture_text ? `<div>${escapeHtml(info.voiture_text)}</div>` : ''}
               ${
@@ -1928,11 +2004,25 @@
         </div>
       `;
 
+      container.querySelector('[data-toggle-no-clue-voiture]').addEventListener('click', async () => {
+        if (noClue) {
+          await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, { voiture_text: null });
+        } else {
+          await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, {
+            voiture_text: NO_CLUE_MARKER,
+            voiture_image_url: null,
+            voiture_exclusive: null,
+          });
+        }
+        const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
+        renderVoitureField(tipsPanel, row, updated);
+      });
+
       container.querySelector('[data-edit-voiture]').addEventListener('click', () => {
         const formEl = container.querySelector('[data-voiture-form]');
         formEl.innerHTML = `
           <input type="text" data-voiture-text value="${escapeHtml(
-            info.voiture_text || ''
+            noClue ? '' : info.voiture_text || ''
           )}" placeholder="Texte (marque, modèle...)" class="gc-input gc-input--compact">
           <input type="text" data-voiture-image value="${escapeHtml(
             info.voiture_image_url || ''

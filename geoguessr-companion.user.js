@@ -2206,6 +2206,9 @@
 
     // Les panneaux résultat/tips n'ont d'intérêt qu'une fois le round terminé (pays révélé) — retirés au début du round suivant.
     GeoCompanion.on('roundStart', () => {
+      // Un round qui démarre signifie forcément que la partie n'est PAS finie — plus fiable que de compter sur gameStart,
+      // qui ne se déclenche pas de façon garantie en duel (détecté via HTTP, alors que le duel tourne surtout en WebSocket).
+      gameFinished = false;
       GeoCompanion.hideResultAndTipsPanels();
     });
 

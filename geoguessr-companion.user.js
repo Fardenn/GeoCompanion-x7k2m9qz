@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      2.42
+// @version      3.0
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats (test edit Claude)
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start

@@ -411,7 +411,18 @@
         border-radius: 999px;
         background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), var(--ds-color-brand-30, #a685ff));
       }
-      .gc-indices-map-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+      .gc-indices-map-wrap {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        position: relative;
+        cursor: grab;
+        touch-action: none;
+      }
+      .gc-indices-map-wrap--dragging { cursor: grabbing; }
       .gc-indices-map-svg { width: 100%; height: 100%; max-height: 100%; }
       .gc-indices-tooltip {
         position: fixed;
@@ -2716,7 +2727,10 @@ function ensureDashboard() {
       panel.innerHTML = `
         <div class="gc-card-header gc-mb-8 gc-shrink-0">
           <div class="gc-title gc-fs-18">💡 Indices par pays</div>
-          <button id="geo-companion-indices-close-btn" class="gc-btn gc-icon-btn gc-fs-18" title="Fermer">✕</button>
+          <div class="gc-flex-gap-6">
+            <button id="geo-companion-indices-zoom-reset-btn" class="gc-btn gc-icon-btn gc-fs-16" title="Réinitialiser le zoom">🔎</button>
+            <button id="geo-companion-indices-close-btn" class="gc-btn gc-icon-btn gc-fs-18" title="Fermer">✕</button>
+          </div>
         </div>
         <div id="geo-companion-indices-map-body" class="gc-flex-col-fill gc-scroll-fill">
           <div class="gc-muted gc-fs-14">Chargement de la carte…</div>
@@ -2768,6 +2782,96 @@ function ensureDashboard() {
       // on force explicitement l'interactivité pour ne pas en dépendre.
       svgEl.style.pointerEvents = 'auto';
 
+      // ZOOM / DÉPLACEMENT : molette pour zoomer (centré sur le curseur), glisser pour se déplacer une fois zoomé —
+      // utile pour sélectionner précisément les petites îles/archipels. État remis à zéro à chaque ouverture de la carte.
+      const wrap = body.querySelector('.gc-indices-map-wrap');
+      let indicesZoom = 1;
+      let indicesPanX = 0;
+      let indicesPanY = 0;
+      const INDICES_ZOOM_MIN = 1;
+      const INDICES_ZOOM_MAX = 10;
+
+      function applyIndicesTransform() {
+        svgEl.style.transform = `translate(${indicesPanX}px, ${indicesPanY}px) scale(${indicesZoom})`;
+      }
+      svgEl.style.transformOrigin = '0 0';
+      applyIndicesTransform();
+
+      wrap.addEventListener(
+        'wheel',
+        (e) => {
+          e.preventDefault();
+          const rect = wrap.getBoundingClientRect();
+          const mouseX = e.clientX - rect.left;
+          const mouseY = e.clientY - rect.top;
+          const zoomFactor = e.deltaY < 0 ? 1.25 : 1 / 1.25;
+          const newZoom = Math.min(INDICES_ZOOM_MAX, Math.max(INDICES_ZOOM_MIN, indicesZoom * zoomFactor));
+          if (newZoom === indicesZoom) return;
+          // Garde le point sous le curseur fixe pendant le zoom, plutôt que de zoomer depuis le coin.
+          indicesPanX = mouseX - ((mouseX - indicesPanX) / indicesZoom) * newZoom;
+          indicesPanY = mouseY - ((mouseY - indicesPanY) / indicesZoom) * newZoom;
+          indicesZoom = newZoom;
+          applyIndicesTransform();
+        },
+        { passive: false }
+      );
+
+      let isDragging = false;
+      let didDrag = false; // distingue un vrai clic pays d'un léger glisser, pour ne pas ouvrir un pays par erreur
+      let dragStartX = 0;
+      let dragStartY = 0;
+      let dragStartPanX = 0;
+      let dragStartPanY = 0;
+
+      wrap.addEventListener('pointerdown', (e) => {
+        isDragging = true;
+        didDrag = false;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        dragStartPanX = indicesPanX;
+        dragStartPanY = indicesPanY;
+        wrap.classList.add('gc-indices-map-wrap--dragging');
+        wrap.setPointerCapture(e.pointerId);
+      });
+      wrap.addEventListener('pointermove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - dragStartX;
+        const dy = e.clientY - dragStartY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDrag = true;
+        indicesPanX = dragStartPanX + dx;
+        indicesPanY = dragStartPanY + dy;
+        applyIndicesTransform();
+      });
+      const endDrag = () => {
+        isDragging = false;
+        wrap.classList.remove('gc-indices-map-wrap--dragging');
+      };
+      wrap.addEventListener('pointerup', endDrag);
+      wrap.addEventListener('pointercancel', endDrag);
+
+      // Capturé AVANT le clic sur le <path> lui-même (phase de capture) : si on vient de glisser, on annule le clic pays.
+      svgEl.addEventListener(
+        'click',
+        (e) => {
+          if (didDrag) {
+            e.stopPropagation();
+            e.preventDefault();
+            didDrag = false;
+          }
+        },
+        { capture: true }
+      );
+
+      const zoomResetBtn = panel.querySelector('#geo-companion-indices-zoom-reset-btn');
+      if (zoomResetBtn) {
+        zoomResetBtn.addEventListener('click', () => {
+          indicesZoom = 1;
+          indicesPanX = 0;
+          indicesPanY = 0;
+          applyIndicesTransform();
+        });
+      }
+
       // La tooltip doit être un enfant direct de <body>, PAS du panneau : .gc-indices-map-panel a un transform (pour se
       // centrer), et un transform sur un ancêtre change le repère de tout position:fixed à l'intérieur (il devient relatif
       // au panneau transformé plutôt qu'à l'écran) — d'où le décalage par rapport à la souris.
@@ -2788,6 +2892,10 @@ function ensureDashboard() {
         path.style.strokeWidth = '0.5';
       });
 
+      // Pays pour lesquels on ne garde que le morceau "mainland" — masque les petites îles/territoires d'outre-mer
+      // (dur à voir/cliquer sur une carte compacte) pour alléger visuellement la carte.
+      const MAINLAND_ONLY_CODES = new Set(['FR', 'ES', 'PT']);
+
       // Regroupe tous les tracés par code pays. L'id peut être posé directement sur un <path>, OU sur un <g> englobant
       // plusieurs <path> (cas fréquent pour les pays multi-fragments : îles, archipels, territoires d'outre-mer).
       const pathsByCode = {};
@@ -2796,8 +2904,20 @@ function ensureDashboard() {
         if (!/^[A-Z]{2}$/.test(code)) return; // ignore les entrées sans code ISO à 2 lettres (ex: territoires non reconnus)
         const targetPaths = el.tagName.toLowerCase() === 'path' ? [el] : Array.from(el.querySelectorAll('path'));
         if (targetPaths.length === 0) return;
+
+        let keptPaths = targetPaths;
+        if (MAINLAND_ONLY_CODES.has(code)) {
+          const mainland = targetPaths.filter((p) => p.classList.contains('mainland'));
+          if (mainland.length > 0) {
+            targetPaths.forEach((p) => {
+              if (!mainland.includes(p)) p.style.display = 'none'; // masque les fragments d'outre-mer
+            });
+            keptPaths = mainland;
+          }
+        }
+
         if (!pathsByCode[code]) pathsByCode[code] = [];
-        pathsByCode[code].push(...targetPaths);
+        pathsByCode[code].push(...keptPaths);
       });
 
       const missingCovered = [...STREETVIEW_COVERED_COUNTRIES].filter((code) => !pathsByCode[code]);
@@ -2814,6 +2934,34 @@ function ensureDashboard() {
       }
 
       Object.entries(pathsByCode).forEach(([code, paths]) => {
+        // Pays multi-fragments : on masque uniquement les PETITS fragments (typiquement des îles/archipels : Corse,
+        // Canaries, Açores...) largement plus petits que le plus grand morceau du pays, pour désencombrer la carte —
+        // les grands territoires disjoints (Alaska, Guyane...) restent visibles même s'ils ne sont pas géographiquement
+        // "attachés" au reste du pays. Basé sur la taille réelle (bounding box), pas sur un classement approximatif.
+        let visiblePaths = paths;
+        if (paths.length > 1) {
+          const areas = paths.map((p) => {
+            try {
+              const bbox = p.getBBox();
+              return bbox.width * bbox.height;
+            } catch (e) {
+              return 0;
+            }
+          });
+          const maxArea = Math.max(...areas);
+          if (maxArea > 0) {
+            const kept = [];
+            paths.forEach((p, i) => {
+              if (areas[i] < maxArea * 0.1) {
+                p.style.display = 'none';
+              } else {
+                kept.push(p);
+              }
+            });
+            visiblePaths = kept;
+          }
+        }
+
         const covered = STREETVIEW_COVERED_COUNTRIES.has(code);
         const count = totals[code] || 0;
         // Pays non couvert par Street View (n'apparaît jamais en partie) : rendu volontairement sombre et non cliquable,
@@ -2822,7 +2970,7 @@ function ensureDashboard() {
           ? indicesIntensityColor(count, maxCount)
           : { fill: 'rgba(0, 0, 0, 0.55)', stroke: 'rgba(255, 255, 255, 0.08)' };
 
-        paths.forEach((path) => {
+        visiblePaths.forEach((path) => {
           path.style.fill = color.fill;
           path.style.stroke = color.stroke;
           path.style.strokeWidth = '0.5';

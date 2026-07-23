@@ -19,6 +19,11 @@
   const SUPABASE_URL = 'https://lpbtzcpmqqsaedpdhptl.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_gH_ae7VUiLAEpuLdRBTlBA_71XF4K44';
 
+  // Marqueur stocké en base pour distinguer "pas d'indice dans cette catégorie" (volontaire, vérifié) de "non renseigné" (juste pas encore fait).
+  // Chaîne texte normale (pas de caractère de contrôle) : Postgres rejette les octets NUL (\u0000) dans les colonnes texte.
+  // Déclaré ici (scope partagé par tous les modules) plutôt que dans uiPanelModule, pour que countryInfoModule puisse aussi l'utiliser.
+  const GC_NO_CLUE_MARKER = '__GC_NO_CLUE__';
+
   // Accès au vrai contexte de page : un @grant actif fait tourner le script dans un sandbox où "window" ne pointe pas vers la page réelle.
   const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
@@ -260,7 +265,7 @@
         max-height: calc(anchor(top) - 70px - 1rem);
         overflow-y: auto;
       }
-  
+
       .gc-lightbox-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); display: flex; align-items: center; justify-content: center; z-index: 9999999; cursor: zoom-out; }
       .gc-lightbox-img { max-width: 90vw; max-height: 90vh; border-radius: 8px; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6); }
       .gc-flag-img { width: auto; vertical-align: middle; display: inline-block; border-radius: 2px; }
@@ -376,6 +381,60 @@
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
       }
       .gc-img:hover { filter: brightness(1.1); }
+
+      /* ==== Carte des indices (page d'accueil) ==== */
+      .gc-btn--indices-open { width: 100%; }
+      .gc-indices-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 999997;
+      }
+      .gc-indices-map-panel {
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: min(97vw, 1320px);
+        height: 85vh;
+        z-index: 999998;
+      }
+      .gc-indices-legend {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .gc-indices-legend-bar {
+        flex: 1;
+        max-width: 160px;
+        height: 8px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), var(--ds-color-brand-30, #a685ff));
+      }
+      .gc-indices-map-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+      .gc-indices-map-svg { width: 100%; height: 100%; max-height: 100%; }
+      .gc-indices-tooltip {
+        position: fixed;
+        z-index: 9999999;
+        background: var(--gc-bg);
+        color: var(--gc-text);
+        border: var(--gc-border);
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 14px;
+        pointer-events: none;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      }
+      /* Vue "grande" du panneau tips, utilisée quand il est ouvert depuis la carte des indices plutôt qu'en fin de round. */
+      .gc-tips-panel--big {
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: min(90vw, 900px);
+        max-height: 88vh;
+        font-size: 21px;
+        z-index: 9999999;
+      }
 
       .gc-toast {
         position: fixed;
@@ -1298,7 +1357,19 @@
       return supabaseClient.remove('tips', id);
     }
 
-    GeoCompanion.tips = { listTipsForCountry, addTip, updateTip, deleteTip };
+    // Nombre de tips par pays, en un seul appel réseau — utilisé par la carte des indices (pas de filtre par pays ici).
+    async function getAllTipCounts() {
+      const rows = await supabaseClient.select('tips', 'select=country_code');
+      if (!rows) return {};
+      const counts = {};
+      for (const r of rows) {
+        if (!r.country_code) continue;
+        counts[r.country_code] = (counts[r.country_code] || 0) + 1;
+      }
+      return counts;
+    }
+
+    GeoCompanion.tips = { listTipsForCountry, addTip, updateTip, deleteTip, getAllTipCounts };
   })();
 
   // MODULE: countryInfo
@@ -1330,7 +1401,36 @@
       return setCountryInfoFields(countryCode, { [field]: value });
     }
 
-    GeoCompanion.countryInfo = { getCountryInfo, setCountryInfoField, setCountryInfoFields };
+    // Nombre de champs renseignés (hors "pas d'indice") par pays, en un seul appel réseau — utilisé par la carte des indices,
+    // en complément des tips, pour donner une vision complète de ce qui est déjà documenté sur chaque pays.
+    const RICHNESS_FIELDS = [
+      'plaque_image_url',
+      'bollard_image_url',
+      'poteau_image_url',
+      'voiture_text',
+      'route_text',
+      'langue_text',
+    ];
+
+    async function getAllCountryInfoCounts() {
+      const rows = await supabaseClient.select(
+        'country_info',
+        `select=country_code,${RICHNESS_FIELDS.join(',')}`
+      );
+      if (!rows) return {};
+      const counts = {};
+      for (const r of rows) {
+        if (!r.country_code) continue;
+        const filled = RICHNESS_FIELDS.reduce(
+          (n, key) => n + (r[key] && r[key] !== GC_NO_CLUE_MARKER ? 1 : 0),
+          0
+        );
+        if (filled > 0) counts[r.country_code] = filled;
+      }
+      return counts;
+    }
+
+    GeoCompanion.countryInfo = { getCountryInfo, setCountryInfoField, setCountryInfoFields, getAllCountryInfoCounts };
   })();
 
   // MODULE: uiPanel
@@ -1344,9 +1444,8 @@
       { key: 'all', label: 'Total' },
     ];
 
-    // Marqueur stocké en base pour distinguer "pas d'indice dans cette catégorie" (volontaire, vérifié) de "non renseigné" (juste pas encore fait).
-    // Chaîne texte normale (pas de caractère de contrôle) : Postgres rejette les octets NUL (\u0000) dans les colonnes texte.
-    const NO_CLUE_MARKER = '__GC_NO_CLUE__';
+    // Marqueur "pas d'indice" (défini plus haut, en scope partagé) — alias local pour lisibilité.
+    const NO_CLUE_MARKER = GC_NO_CLUE_MARKER;
     function isNoClue(value) {
       return value === NO_CLUE_MARKER;
     }
@@ -1711,6 +1810,11 @@
           <div class="gc-flex-gap-6">
             <button id="geo-companion-tips-refresh-btn" title="Actualiser les tips" class="gc-btn gc-icon-btn gc-fs-16">🔄</button>
             <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-icon-btn gc-fs-18">▼</button>
+            ${
+              row.game_mode === 'indices-view'
+                ? `<button id="geo-companion-tips-close-indices-btn" title="Fermer" class="gc-btn gc-icon-btn gc-fs-18">✕</button>`
+                : ''
+            }
           </div>
         </div>
         <div id="geo-companion-tips-body" class="gc-flex-col-fill">
@@ -1747,6 +1851,9 @@
         refreshBtn.disabled = true;
         await renderTips(row);
       });
+
+      const closeIndicesBtn = tipsPanel.querySelector('#geo-companion-tips-close-indices-btn');
+      if (closeIndicesBtn) closeIndicesBtn.addEventListener('click', closeIndicesDetail);
 
       tipsPanel.querySelectorAll('[data-edit-tip]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -2386,6 +2493,7 @@ function ensureDashboard() {
         </div>
         <div id="geo-companion-dashboard-body" class="gc-flex-col-fill ${dashboardCollapsed ? 'gc-collapsed' : ''}">
           <hr class="gc-hr gc-hr--dashed gc-hr-tight">
+          <button id="geo-companion-indices-open-btn" class="gc-btn gc-btn--secondary gc-btn--indices-open gc-mb-8">💡 Voir la carte des indices</button>
           <div class="gc-btn-row gc-mb-8 gc-shrink-0">
             ${FILTERS.map(
               (f) => `
@@ -2407,6 +2515,9 @@ function ensureDashboard() {
           <div id="geo-companion-dashboard-list" class="gc-scroll-fill"></div>
         </div>
       `;
+
+      const indicesOpenBtn = panel.querySelector('#geo-companion-indices-open-btn');
+      if (indicesOpenBtn) indicesOpenBtn.addEventListener('click', () => openIndicesMap());
 
       const collapseBtn = panel.querySelector('#geo-companion-dashboard-collapse-btn');
       const dashboardBody = panel.querySelector('#geo-companion-dashboard-body');
@@ -2483,6 +2594,7 @@ function ensureDashboard() {
         if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
       } else {
         removeDashboard();
+        closeIndicesMap();
         // Complète le filet ci-dessus pour le cas où le joueur quitte la partie vers une page qui n'est ni l'accueil ni une page de jeu.
         if (wasInGameplayUrl && !nowInGameplayUrl && GeoCompanion.hideResultAndTipsPanels) {
           GeoCompanion.hideResultAndTipsPanels();
@@ -2515,6 +2627,239 @@ function ensureDashboard() {
     };
 
     pageWindow.addEventListener('popstate', () => setTimeout(checkHomepage, 300));
+
+    // CARTE DES INDICES (page d'accueil) : vue d'ensemble de tous les pays ayant au moins un tip ou un champ pays renseigné.
+    const INDICES_MAP_ID = 'geo-companion-indices-map';
+    // Carte simplifiée, légère (~70 Ko), sous licence libre — chargée à la demande puis mise en cache localement (pas embarquée dans le script).
+    const WORLD_MAP_SVG_URL = 'https://raw.githubusercontent.com/flekschas/simple-world-map/master/world-map.svg';
+    const WORLD_MAP_CACHE_KEY = 'geoCompanion_worldMapSvgCache_v1';
+
+    // Récupère le SVG (en cache après le premier chargement, pour ne pas re-télécharger à chaque ouverture).
+    async function getWorldMapSvgMarkup() {
+      const cached = GM_getValue(WORLD_MAP_CACHE_KEY, null);
+      if (cached) return cached;
+      try {
+        const res = await fetch(WORLD_MAP_SVG_URL);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const svgText = await res.text();
+        GM_setValue(WORLD_MAP_CACHE_KEY, svgText);
+        return svgText;
+      } catch (e) {
+        console.error('[GeoCompanion] Impossible de charger la carte du monde :', e);
+        GeoCompanion.notify('Impossible de charger la carte du monde', 'error');
+        return null;
+      }
+    }
+
+    // Interpolation violet sombre -> accent clair du thème (pas de rouge/vert ici : cet axe n'est pas une "réussite", juste une quantité).
+    function indicesIntensityColor(count, maxCount) {
+      if (!count) return { fill: 'rgba(255, 255, 255, 0.05)', stroke: 'rgba(255, 255, 255, 0.12)' };
+      const from = { r: 57, g: 50, b: 115 }; // --ds-color-purple-80
+      const to = { r: 166, g: 133, b: 255 }; // --ds-color-brand-30
+      const t = maxCount > 0 ? Math.min(1, count / maxCount) : 0;
+      const r = Math.round(from.r + (to.r - from.r) * t);
+      const g = Math.round(from.g + (to.g - from.g) * t);
+      const b = Math.round(from.b + (to.b - from.b) * t);
+      return { fill: `rgb(${r}, ${g}, ${b})`, stroke: 'rgba(255, 255, 255, 0.28)' };
+    }
+
+    function ensureIndicesMapPanel() {
+      let panel = document.getElementById(INDICES_MAP_ID);
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = INDICES_MAP_ID;
+        panel.className = 'gc-panel gc-panel--outlined gc-indices-map-panel';
+        document.body.appendChild(panel);
+      }
+      return panel;
+    }
+
+    function closeIndicesDetail() {
+      const tipsPanel = document.getElementById(TIPS_PANEL_ID);
+      if (tipsPanel && tipsPanel.classList.contains('gc-tips-panel--big')) {
+        tipsPanel.remove();
+      }
+    }
+
+    function closeIndicesMap() {
+      const backdrop = document.getElementById('geo-companion-indices-backdrop');
+      if (backdrop) backdrop.remove();
+      const panel = document.getElementById(INDICES_MAP_ID);
+      if (panel) panel.remove();
+      const tooltip = document.getElementById('geo-companion-indices-tooltip');
+      if (tooltip) tooltip.remove();
+      closeIndicesDetail();
+    }
+
+    async function openIndicesDetail(code) {
+      const row = { country_code: code, game_mode: 'indices-view' };
+      await renderTips(row);
+      const tipsPanel = document.getElementById(TIPS_PANEL_ID);
+      if (tipsPanel) {
+        tipsPanel.classList.add('gc-tips-panel--big');
+        tipsPanel.classList.remove('gc-panel--duel-offset');
+      }
+    }
+
+    async function openIndicesMap() {
+      // Fond semi-transparent façon lightbox, pour bien détacher la carte du reste de la page.
+      let backdrop = document.getElementById('geo-companion-indices-backdrop');
+      if (!backdrop) {
+        backdrop = document.createElement('div');
+        backdrop.id = 'geo-companion-indices-backdrop';
+        backdrop.className = 'gc-indices-backdrop';
+        backdrop.addEventListener('click', closeIndicesMap);
+        document.body.appendChild(backdrop);
+      }
+
+      const panel = ensureIndicesMapPanel();
+      panel.innerHTML = `
+        <div class="gc-card-header gc-mb-8 gc-shrink-0">
+          <div class="gc-title gc-fs-18">💡 Indices par pays</div>
+          <button id="geo-companion-indices-close-btn" class="gc-btn gc-icon-btn gc-fs-18" title="Fermer">✕</button>
+        </div>
+        <div id="geo-companion-indices-map-body" class="gc-flex-col-fill gc-scroll-fill">
+          <div class="gc-muted gc-fs-14">Chargement de la carte…</div>
+        </div>
+      `;
+      panel.querySelector('#geo-companion-indices-close-btn').addEventListener('click', closeIndicesMap);
+
+      const [svgText, tipCounts, infoCounts] = await Promise.all([
+        getWorldMapSvgMarkup(),
+        GeoCompanion.tips.getAllTipCounts(),
+        GeoCompanion.countryInfo.getAllCountryInfoCounts(),
+      ]);
+
+      const body = document.getElementById('geo-companion-indices-map-body');
+      if (!body) return; // le panneau a été refermé pendant le chargement
+
+      if (!svgText) {
+        body.innerHTML = `<div class="gc-muted gc-fs-14">Impossible de charger la carte. Réessaie plus tard.</div>`;
+        return;
+      }
+
+      // Total "indices" par pays = tips + champs pays renseignés, pour une vision complète de ce qui est déjà documenté.
+      const totals = {};
+      Object.keys(tipCounts).forEach((code) => {
+        totals[code] = (totals[code] || 0) + tipCounts[code];
+      });
+      Object.keys(infoCounts).forEach((code) => {
+        totals[code] = (totals[code] || 0) + infoCounts[code];
+      });
+      const maxCount = Object.values(totals).reduce((max, n) => Math.max(max, n), 0);
+
+      body.innerHTML = `
+        <div class="gc-indices-legend gc-shrink-0">
+          <span class="gc-fs-13 gc-opacity-8">Moins d'indices</span>
+          <span class="gc-indices-legend-bar"></span>
+          <span class="gc-fs-13 gc-opacity-8">Plus d'indices</span>
+        </div>
+        <div class="gc-indices-map-wrap">${svgText}</div>
+      `;
+
+      const svgEl = body.querySelector('svg');
+      if (!svgEl) {
+        body.innerHTML = `<div class="gc-muted gc-fs-14">Carte invalide.</div>`;
+        return;
+      }
+      svgEl.classList.add('gc-indices-map-svg');
+      svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      // Le SVG source peut embarquer son propre style (ex: pointer-events:none par défaut pour un effet de survol) —
+      // on force explicitement l'interactivité pour ne pas en dépendre.
+      svgEl.style.pointerEvents = 'auto';
+
+      // La tooltip doit être un enfant direct de <body>, PAS du panneau : .gc-indices-map-panel a un transform (pour se
+      // centrer), et un transform sur un ancêtre change le repère de tout position:fixed à l'intérieur (il devient relatif
+      // au panneau transformé plutôt qu'à l'écran) — d'où le décalage par rapport à la souris.
+      let tooltip = document.getElementById('geo-companion-indices-tooltip');
+      if (!tooltip) {
+        tooltip = document.createElement('div');
+        tooltip.id = 'geo-companion-indices-tooltip';
+        tooltip.className = 'gc-indices-tooltip gc-collapsed';
+        document.body.appendChild(tooltip);
+      }
+      tooltip.classList.add('gc-collapsed');
+
+      // Fond neutre par défaut sur TOUS les tracés (y compris ceux qu'on ne reconnaît pas par la suite) — évite qu'un pays
+      // reste avec le noir par défaut du SVG source si son id ne matche pas le regroupement par code ci-dessous.
+      svgEl.querySelectorAll('path').forEach((path) => {
+        path.style.fill = 'rgba(255, 255, 255, 0.05)';
+        path.style.stroke = 'rgba(255, 255, 255, 0.12)';
+        path.style.strokeWidth = '0.5';
+      });
+
+      // Regroupe tous les tracés par code pays. L'id peut être posé directement sur un <path>, OU sur un <g> englobant
+      // plusieurs <path> (cas fréquent pour les pays multi-fragments : îles, archipels, territoires d'outre-mer).
+      const pathsByCode = {};
+      svgEl.querySelectorAll('[id]').forEach((el) => {
+        const code = el.id.toUpperCase();
+        if (!/^[A-Z]{2}$/.test(code)) return; // ignore les entrées sans code ISO à 2 lettres (ex: territoires non reconnus)
+        const targetPaths = el.tagName.toLowerCase() === 'path' ? [el] : Array.from(el.querySelectorAll('path'));
+        if (targetPaths.length === 0) return;
+        if (!pathsByCode[code]) pathsByCode[code] = [];
+        pathsByCode[code].push(...targetPaths);
+      });
+
+      const missingCovered = [...STREETVIEW_COVERED_COUNTRIES].filter((code) => !pathsByCode[code]);
+      console.log(
+        `[GeoCompanion] Carte indices : ${Object.keys(pathsByCode).length} pays détectés dans le SVG, ${
+          Object.keys(totals).length
+        } avec au moins un indice (max ${maxCount}).`
+      );
+      if (missingCovered.length) {
+        console.warn(
+          `[GeoCompanion] Carte indices : ${missingCovered.length} pays couverts par GeoGuessr sans tracé trouvé dans le SVG :`,
+          missingCovered.join(', ')
+        );
+      }
+
+      Object.entries(pathsByCode).forEach(([code, paths]) => {
+        const covered = STREETVIEW_COVERED_COUNTRIES.has(code);
+        const count = totals[code] || 0;
+        // Pays non couvert par Street View (n'apparaît jamais en partie) : rendu volontairement sombre et non cliquable,
+        // distinct du gris neutre par défaut ci-dessus pour qu'on comprenne que c'est intentionnel et pas un bug d'affichage.
+        const color = covered
+          ? indicesIntensityColor(count, maxCount)
+          : { fill: 'rgba(0, 0, 0, 0.55)', stroke: 'rgba(255, 255, 255, 0.08)' };
+
+        paths.forEach((path) => {
+          path.style.fill = color.fill;
+          path.style.stroke = color.stroke;
+          path.style.strokeWidth = '0.5';
+          path.style.cursor = covered ? 'pointer' : 'default';
+          path.style.pointerEvents = 'auto';
+          path.style.transition = 'filter 0.15s ease';
+
+          // Pas de popup ni de survol pour les pays qui n'apparaissent jamais en partie — seuls les pays jouables
+          // (avec 0 indice ou plus) doivent réagir à la souris.
+          if (!covered) return;
+
+          path.addEventListener('mouseenter', (e) => {
+            // Position immédiate au survol (pas seulement au premier mousemove), sinon la popup apparaît d'abord dans un coin.
+            tooltip.style.left = `${e.clientX + 14}px`;
+            tooltip.style.top = `${e.clientY + 14}px`;
+            path.style.filter = 'brightness(1.35)';
+            tooltip.classList.remove('gc-collapsed');
+            tooltip.innerHTML = `${flagImgFromCode(code, { height: '1.1em' })} <b>${escapeHtml(
+              countryNameFromCode(code)
+            )}</b> — ${count} indice${count > 1 ? 's' : ''}`;
+          });
+          path.addEventListener('mousemove', (e) => {
+            tooltip.style.left = `${e.clientX + 14}px`;
+            tooltip.style.top = `${e.clientY + 14}px`;
+          });
+          path.addEventListener('mouseleave', () => {
+            path.style.filter = '';
+            tooltip.classList.add('gc-collapsed');
+          });
+          // Le early-return ci-dessus garantit qu'on n'arrive ici que pour les pays couverts.
+          path.addEventListener('click', () => openIndicesDetail(code));
+        });
+      });
+    }
+
+    // Filet de sécurité : referme la carte des indices si on quitte l'accueil ou si une partie démarre, pour ne pas la laisser flotter ailleurs.
+    GeoCompanion.on('gameStart', closeIndicesMap);
 
     // Vérification initiale (script chargé directement sur l'accueil, ou en cours de partie après un refresh).
     checkHomepage();

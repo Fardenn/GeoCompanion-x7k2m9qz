@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      3.22
+// @version      4.00
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats (test edit Claude)
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -447,53 +447,172 @@
         max-width: 80vw;
       }
 
-      /* ==== Carte "Indices" injectée nativement dans la colonne d'accueil ==== */
-      .gc-native-card-li { list-style: none; }
-      .gc-native-card {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 14px 16px;
-        border-radius: var(--surface-radius-outer, 1rem);
-        background: var(--gc-bg-gradient);
-        border: var(--gc-border);
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      /* ==== Carte "Indices" injectée nativement dans la colonne d'accueil ====
+         Traduction fidèle des règles réelles left-panel-card_* / world-card_* / headline_* / body-text_* de
+         GeoGuessr (récupérées via DevTools), reprises ici avec nos propres classes gc-* pour ne pas dépendre
+         de noms de classes hashés qui changeraient à chaque déploiement de leur site. */
+      .gc-native-card-li {
+        list-style: none;
+        transition: filter 0.3s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+      }
+      .gc-native-card-link {
+        display: block;
+        width: 100%;
+        padding: 0;
+        background: none;
+        border: 0;
+        text-align: left;
         text-decoration: none;
+        color: inherit;
         cursor: pointer;
-        transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+        border-radius: 1rem;
       }
-      .gc-native-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 24px rgba(121, 80, 229, 0.35);
-        filter: brightness(1.08);
+      .gc-native-card-link:hover .gc-native-card-shimmer { transform: translateX(100%); }
+      .gc-native-card-link:hover .gc-native-card-bg-image,
+      .gc-native-card-link:hover .gc-native-card-gradient { filter: brightness(1.25); }
+      .gc-native-card-link:active .gc-native-card-surface { transform: scale(0.95); transition-duration: 20ms; }
+
+      .gc-native-card-surface {
+        background-color: var(--ds-color-purple-90, #211a4c);
+        position: relative;
+        width: 100%;
+        overflow: clip;
+        padding-bottom: 0.25rem;
+        border-radius: 1rem;
+        box-shadow:
+          0 0 0 0 color-mix(in srgb, var(--ds-color-brand-30, #a685ff) 0%, transparent),
+          0 0 0 0 color-mix(in srgb, var(--ds-color-brand-50, #7950e5) 0%, transparent);
+        transition:
+          box-shadow 0.3s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)),
+          transform 0.3s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
       }
-      .gc-native-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-      .gc-native-card-title {
-        font-family: var(--gc-font);
-        font-weight: 700;
-        font-style: italic;
-        font-size: 18px;
-        color: var(--gc-text);
+
+      /* "relief" : ombres/lumières internes qui donnent le rebord légèrement bombé. */
+      .gc-native-card-relief {
+        box-shadow:
+          inset 0 -0.25rem 0.0625rem 0 oklch(from var(--ds-color-black-100, #000) l c h / 40%),
+          inset 0 0.0625rem 0 0 oklch(from var(--ds-color-white-100, #fff) l c h / 10%),
+          inset 0 0.125rem 0.5rem 0 oklch(from var(--ds-color-purple-70, #4a2399) l c h / 50%),
+          inset 0 0.0625rem 0 0 oklch(from var(--ds-color-white-100, #fff) l c h / 20%);
+        position: absolute;
+        inset: 0;
+        z-index: 50;
+        border-radius: inherit;
+        pointer-events: none;
       }
-      .gc-native-card-subtitle {
-        font-family: var(--gc-font);
-        font-weight: 400;
-        font-style: italic;
-        font-size: 14px;
-        color: var(--gc-text);
-        opacity: 0.6;
+
+      .gc-native-card-gradient {
+        position: absolute;
+        inset-block: 0;
+        left: 0;
+        z-index: 0;
+        width: 200%;
+        border-radius: inherit;
+        background-image: linear-gradient(to right, var(--ds-color-purple-90, #211a4c), var(--ds-color-purple-50, #7950e5));
+        transform: translateX(0);
+        transition:
+          transform 0.5s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)),
+          filter 0.5s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+        pointer-events: none;
       }
-      .gc-native-card-icon {
-        flex-shrink: 0;
-        width: 44px;
-        height: 44px;
-        border-radius: 50%;
-        background: var(--gc-accent-gradient);
+
+      /* Même image de fond que la carte "World" (pas d'asset dédié pour "Indices"). Le dégradé radial sert de
+         repli automatique si ce fichier venait à changer de hash lors d'un futur déploiement GeoGuessr. */
+      .gc-native-card-bg-image {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        background-position: 50% center;
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-image:
+          url('/_next/static/media/bg-home-world.04379cd4.webp'),
+          radial-gradient(circle at 80% 20%, oklch(from var(--ds-color-brand-30, #a685ff) l c h / 35%), transparent 65%);
+        pointer-events: none;
+        opacity: 1;
+        transition:
+          opacity 0.5s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)),
+          filter 0.5s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+      }
+
+      .gc-native-card-icon-wrapper {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 22px;
+        pointer-events: none;
+        /* Permet à l'icône ci-dessous de se dimensionner en % de la largeur RÉELLE de la carte (cqw),
+           comme l'icône native (width: 33.333%) — plutôt qu'une taille fixe qui la faisait paraître minuscule. */
+        container-type: inline-size;
+      }
+      .gc-native-card-icon-emoji {
+        position: absolute;
+        right: -0.25rem;
+        font-size: 56px; /* repli si container queries indisponibles */
+        font-size: 30cqw; /* ~33% de la largeur de la carte, comme l'icône native */
+        filter: drop-shadow(0 0.25rem 0.25rem oklch(from var(--ds-color-black-100, #000) l c h / 80%));
+        transform: rotate(-10deg);
+      }
+
+      .gc-native-card-shimmer-mask {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        border-radius: inherit;
+        pointer-events: none;
+      }
+      .gc-native-card-shimmer {
+        position: absolute;
+        inset: 0;
+        transform: translateX(-100%);
+        background-image: linear-gradient(to right, transparent, oklch(from var(--ds-color-white-100, #fff) l c h / 15%), transparent);
+        transition: transform 0.5s var(--ease-out-quart, cubic-bezier(0.25, 1, 0.5, 1));
+      }
+
+      .gc-native-card-title {
+        padding: 0.75rem 0.75rem 0;
+        line-height: 1;
+        text-shadow: 0 0.0625rem 0.0625rem oklch(from var(--ds-color-black-100, #000) l c h / 40%);
+        position: relative;
+        z-index: 10;
+        filter: drop-shadow(0 0.125rem 0.03125rem oklch(from var(--ds-color-black-100, #000) l c h / 40%));
+      }
+      .gc-native-card-heading {
+        margin: 0;
+        font-size: var(--font-size-18, 18px);
+        line-height: var(--line-height-18, 1.2);
+        font-weight: 700;
+        font-style: italic;
+        color: var(--ds-color-white-100, #fff);
+      }
+
+      /* Le "collapsible" natif alterne entre un contenu replié (par défaut) et un contenu déplié au survol
+         (data-open). On n'a qu'un seul contenu à afficher ici, donc il reste ouvert en permanence via --open. */
+      .gc-native-card-collapsible {
+        position: relative;
+        z-index: 10;
+        filter: drop-shadow(0 0.125rem 0.03125rem oklch(from var(--ds-color-black-100, #000) l c h / 40%));
+        display: grid;
+        grid-template-rows: 0fr;
+        transition: grid-template-rows 0.3s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+      }
+      .gc-native-card-collapsible--open { grid-template-rows: 1fr; }
+      .gc-native-card-collapsible-inner { overflow: hidden; min-height: 0; }
+      .gc-native-card-collapsed {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem;
+        min-height: 4rem;
+      }
+      .gc-native-card-subtitle {
+        font-size: var(--font-size-14, 14px);
+        line-height: var(--line-height-14, 1.2);
+        font-weight: 400;
+        font-style: italic;
+        color: var(--ds-color-white-60, rgba(255, 255, 255, 0.6));
       }
     `;
     document.head.appendChild(style);
@@ -640,6 +759,21 @@
       );
     }
 
+    // L'API profil ("/api/v3/profiles" ou "/api/v3/profiles/me") est appelée par GeoGuessr au chargement de
+    // chaque page : source du pseudo bien plus fiable que le scraping DOM (sélecteur de classe hashée) utilisé
+    // en repli par identityModule. Volontairement PAS "/api/v3/profiles/{id}" (profils d'AUTRES joueurs).
+    function isOwnProfileApiUrl(url) {
+      return /\/api\/v3\/profiles(\/me)?(\?|$)/.test(url);
+    }
+
+    function maybeExtractPlayerName(data) {
+      // Selon l'endpoint, le pseudo est à la racine ({nick}) ou imbriqué ({user: {nick}}).
+      const nick = data?.nick ?? data?.user?.nick ?? null;
+      if (typeof nick === 'string' && nick.trim()) {
+        GeoCompanion.emit('playerNameFromApi', nick.trim());
+      }
+    }
+
     // --- Hook fetch ---
     const originalFetch = pageWindow.fetch;
     pageWindow.fetch = async function (...args) {
@@ -652,6 +786,13 @@
             .clone()
             .json()
             .then(handleGameObject)
+            .catch(() => {});
+        }
+        if (url && isOwnProfileApiUrl(url)) {
+          response
+            .clone()
+            .json()
+            .then(maybeExtractPlayerName)
             .catch(() => {});
         }
       } catch (e) {
@@ -677,6 +818,9 @@
             const data = JSON.parse(this.responseText);
             handleGameObject(data);
           }
+          if (this._geoEventsUrl && isOwnProfileApiUrl(this._geoEventsUrl)) {
+            maybeExtractPlayerName(JSON.parse(this.responseText));
+          }
         } catch (e) {
           /* ignore */
         }
@@ -685,6 +829,189 @@
     };
 
     // --- Hook WebSocket (live challenge + duel) : GeoGuessr y pousse les vrais events de round/partie ---
+    // Adapters par mode : chaque code de message WS pointe vers son handler, regroupés par famille
+    // (LiveChallenge* = live challenge, Duel* = duel). Ajouter un mode = ajouter ses handlers ici,
+    // sans toucher aux autres.
+    const WS_HANDLERS = {
+      // ==== Adapter live challenge ====
+      LiveChallengeRoundStarting(data) {
+        GeoCompanion.emit('roundStart', {
+          ...(data.liveChallenge?.state || lastGoodGameSnapshot || {}),
+          _source: 'ws-round-starting',
+        });
+      },
+
+      LiveChallengeRoundEnded(data) {
+        const state = data.liveChallenge?.state;
+        // currentRoundNumber est présent directement sur ce message (confirmé par capture réseau réelle) — plus fiable que le compteur local.
+        const endedRound = state?.currentRoundNumber ?? liveChallengeRound ?? currentRound ?? 1;
+        if (roundEndEmittedRound === endedRound) return;
+
+        // state a toujours guesses:null (confirmé par capture réseau) — le guess de ce joueur est ailleurs (LeaderboardUpdate).
+        const game = state
+          ? { ...(lastGoodGameSnapshot || {}), ...state, guesses: state.guesses ?? lastGoodGameSnapshot?.guesses ?? null }
+          : lastGoodGameSnapshot;
+        if (!game) return;
+
+        // Le guess capturé via LeaderboardUpdate (wsOwnGuessByRound) est fiable pour tout le monde, host ou non — utilisé en priorité.
+        const wsGuess = wsOwnGuessByRound[endedRound];
+        const finalGame = wsGuess
+          ? {
+              ...game,
+              guesses: [
+                {
+                  ...(game.guesses?.[game.guesses.length - 1] || {}),
+                  lat: wsGuess.lat,
+                  lng: wsGuess.lng,
+                  distanceInMeters: wsGuess.distanceMeters,
+                  ...(wsGuess.score != null ? { roundScoreInPoints: wsGuess.score } : {}),
+                },
+              ],
+            }
+          : game;
+        roundEndEmittedRound = endedRound;
+        liveChallengeRound = endedRound;
+        persistState();
+        lastEmittedRoundGameByRound[endedRound] = finalGame;
+        GeoCompanion.emit('roundEnd', {
+          ...finalGame,
+          round: endedRound,
+          _source: state ? 'ws-round-ended' : 'ws-round-ended-http-fallback',
+        });
+      },
+
+      FinishChallengeFinished(data) {
+        // Le vrai code est "FinishChallengeFinished", pas "LiveChallengeFinished" (confirmé par capture réseau réelle).
+        if (gameState !== 'finished') {
+          gameState = 'finished';
+          persistState();
+          GeoCompanion.emit('gameEnd', data.liveChallenge?.state || lastGoodGameSnapshot || {});
+        }
+      },
+
+      LiveChallengeLeaderboardUpdate(data) {
+        // Repli pour garder liveChallengeRound à jour entre deux RoundEnded (utile si un message venait à être manqué).
+        const roundNumber = data.liveChallenge?.leaderboards?.roundGuessTime?.roundNumber;
+        if (typeof roundNumber === 'number' && roundNumber !== liveChallengeRound) {
+          liveChallengeRound = roundNumber;
+          persistState();
+        }
+
+        // Notre guess pour ce round : liveChallenge.leaderboards.round.entries[i] et .guesses[i] se correspondent par index.
+        const roundLeaderboard = data.liveChallenge?.leaderboards?.round;
+        if (
+          !roundLeaderboard ||
+          typeof roundLeaderboard.roundNumber !== 'number' ||
+          !Array.isArray(roundLeaderboard.entries) ||
+          !Array.isArray(roundLeaderboard.guesses)
+        ) {
+          return;
+        }
+        const myName = GeoCompanion.getPlayerName?.();
+        if (!myName) return;
+        const myIndex = roundLeaderboard.entries.findIndex((e) => e && e.name === myName);
+        const myGuess = myIndex !== -1 ? roundLeaderboard.guesses[myIndex] : null;
+        const myEntry = myIndex !== -1 ? roundLeaderboard.entries[myIndex] : null;
+        if (!myGuess) return;
+
+        const roundNum = roundLeaderboard.roundNumber;
+        const hadGuessBefore = wsOwnGuessByRound[roundNum] != null;
+        // Score parfois absent du guess même via HTTP (même souci racine que country_code/actual_lat) — plusieurs replis testés.
+        const myScore =
+          myGuess.score ??
+          myGuess.roundScoreInPoints ??
+          myGuess.points ??
+          myEntry?.score ??
+          myEntry?.roundScore ??
+          myEntry?.totalScore ??
+          null;
+        if (myScore == null) {
+          console.log(
+            '[GeoCompanion] 🔎 Score introuvable dans le guess WS, structure brute (aide au debug) — guess:',
+            JSON.stringify(myGuess),
+            '| entry:',
+            JSON.stringify(myEntry)
+          );
+        }
+        wsOwnGuessByRound[roundNum] = {
+          lat: myGuess.lat,
+          lng: myGuess.lng,
+          distanceMeters: myGuess.distance,
+          score: myScore,
+        };
+
+        // Cas particulier : ce guess arrive après le roundEnd déjà traité (joueur qui n'a pas cliqué à temps) — on met à jour et ré-émet.
+        if (!hadGuessBefore && roundEndEmittedRound === roundNum && lastEmittedRoundGameByRound[roundNum]) {
+          const previousGame = lastEmittedRoundGameByRound[roundNum];
+          const updatedGame = {
+            ...previousGame,
+            guesses: [
+              {
+                ...(previousGame.guesses?.[0] || {}),
+                lat: myGuess.lat,
+                lng: myGuess.lng,
+                distanceInMeters: myGuess.distance,
+                ...(myScore != null ? { roundScoreInPoints: myScore } : {}),
+              },
+            ],
+          };
+          lastEmittedRoundGameByRound[roundNum] = updatedGame;
+          GeoCompanion.emit('roundEnd', {
+            ...updatedGame,
+            round: roundNum,
+            _source: 'ws-late-guess-update',
+          });
+        }
+      },
+
+      // ==== Adapter duel ====
+      DuelStarted(data) {
+        WS_HANDLERS._duelRoundStart(data, 'ws-duel-started');
+      },
+      DuelNewRound(data) {
+        WS_HANDLERS._duelRoundStart(data, 'ws-duel-new-round');
+      },
+      // DuelStarted = premier round, DuelNewRound = suivants ; délai de 3s (demande explicite) pour laisser lire les panneaux du round précédent.
+      _duelRoundStart(data, source) {
+        const duelStateSnapshot = data.duel?.state || lastGoodGameSnapshot || {};
+        setTimeout(() => {
+          GeoCompanion.emit('roundStart', { ...duelStateSnapshot, _source: source });
+        }, 3000);
+      },
+
+      DuelRoundTimedOut(data) {
+        // Pays sur rounds[].panorama.countryCode (pas panoramaQuestionPayload comme en live challenge, confirmé par capture réseau) ; score/guess par équipe non géré, seul le pays nous intéresse en duel (demande explicite).
+        const duelState = data.duel?.state;
+        const endedRound = duelState?.currentRoundNumber ?? duelState?.round ?? liveChallengeRound ?? currentRound ?? 1;
+        if (roundEndEmittedRound === endedRound) return;
+
+        const game = duelState
+          ? { ...(lastGoodGameSnapshot || {}), ...duelState, guesses: duelState.guesses ?? lastGoodGameSnapshot?.guesses ?? null }
+          : lastGoodGameSnapshot;
+        if (!game) return;
+
+        roundEndEmittedRound = endedRound;
+        liveChallengeRound = endedRound;
+        persistState();
+        lastEmittedRoundGameByRound[endedRound] = game;
+        GeoCompanion.emit('roundEnd', {
+          ...game,
+          round: endedRound,
+          _source: duelState ? 'ws-duel-round-timedout' : 'ws-duel-round-timedout-http-fallback',
+        });
+      },
+
+      DuelFinished(data) {
+        // Contrairement au live challenge (gameEnd trop précoce pour masquer, voir plus bas), DuelFinished masque directement les panneaux (demande explicite).
+        if (gameState !== 'finished') {
+          gameState = 'finished';
+          persistState();
+          GeoCompanion.emit('gameEnd', data.duel?.state || lastGoodGameSnapshot || {});
+        }
+        if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
+      },
+    };
+
     const OriginalWebSocket = pageWindow.WebSocket;
     if (typeof OriginalWebSocket === 'function') {
       pageWindow.WebSocket = function (...args) {
@@ -698,162 +1025,12 @@
           }
           if (!data || !data.code) return;
 
-          if (data.code === 'LiveChallengeRoundStarting') {
-            GeoCompanion.emit('roundStart', {
-              ...(data.liveChallenge?.state || lastGoodGameSnapshot || {}),
-              _source: 'ws-round-starting',
-            });
-          } else if (data.code === 'LiveChallengeRoundEnded') {
-            const state = data.liveChallenge?.state;
-            // currentRoundNumber est présent directement sur ce message (confirmé par capture réseau réelle) — plus fiable que le compteur local.
-            const endedRound = state?.currentRoundNumber ?? liveChallengeRound ?? currentRound ?? 1;
-            if (roundEndEmittedRound !== endedRound) {
-              // state a toujours guesses:null (confirmé par capture réseau) — le guess de ce joueur est ailleurs (LeaderboardUpdate).
-              const game = state
-                ? { ...(lastGoodGameSnapshot || {}), ...state, guesses: state.guesses ?? lastGoodGameSnapshot?.guesses ?? null }
-                : lastGoodGameSnapshot;
-              if (game) {
-                // Le guess capturé via LeaderboardUpdate (wsOwnGuessByRound) est fiable pour tout le monde, host ou non — utilisé en priorité.
-                const wsGuess = wsOwnGuessByRound[endedRound];
-                const finalGame = wsGuess
-                  ? {
-                      ...game,
-                      guesses: [
-                        {
-                          ...(game.guesses?.[game.guesses.length - 1] || {}),
-                          lat: wsGuess.lat,
-                          lng: wsGuess.lng,
-                          distanceInMeters: wsGuess.distanceMeters,
-                          ...(wsGuess.score != null ? { roundScoreInPoints: wsGuess.score } : {}),
-                        },
-                      ],
-                    }
-                  : game;
-                roundEndEmittedRound = endedRound;
-                liveChallengeRound = endedRound;
-                persistState();
-                lastEmittedRoundGameByRound[endedRound] = finalGame;
-                GeoCompanion.emit('roundEnd', {
-                  ...finalGame,
-                  round: endedRound,
-                  _source: state ? 'ws-round-ended' : 'ws-round-ended-http-fallback',
-                });
-              }
-            }
-          } else if (data.code === 'FinishChallengeFinished') {
-            // Le vrai code est "FinishChallengeFinished", pas "LiveChallengeFinished" (confirmé par capture réseau réelle).
-            if (gameState !== 'finished') {
-              gameState = 'finished';
-              persistState();
-              GeoCompanion.emit('gameEnd', data.liveChallenge?.state || lastGoodGameSnapshot || {});
-            }
-          } else if (data.code === 'DuelStarted' || data.code === 'DuelNewRound') {
-            // DuelStarted = premier round, DuelNewRound = suivants ; délai de 3s (demande explicite) pour laisser lire les panneaux du round précédent.
-            const duelStateSnapshot = data.duel?.state || lastGoodGameSnapshot || {};
-            const source = data.code === 'DuelStarted' ? 'ws-duel-started' : 'ws-duel-new-round';
-            setTimeout(() => {
-              GeoCompanion.emit('roundStart', { ...duelStateSnapshot, _source: source });
-            }, 3000);
-          } else if (data.code === 'DuelRoundTimedOut') {
-            // Pays sur rounds[].panorama.countryCode (pas panoramaQuestionPayload comme en live challenge, confirmé par capture réseau) ; score/guess par équipe non géré, seul le pays nous intéresse en duel (demande explicite).
-            const duelState = data.duel?.state;
-            const endedRound = duelState?.currentRoundNumber ?? duelState?.round ?? liveChallengeRound ?? currentRound ?? 1;
-            if (roundEndEmittedRound !== endedRound) {
-              const game = duelState
-                ? { ...(lastGoodGameSnapshot || {}), ...duelState, guesses: duelState.guesses ?? lastGoodGameSnapshot?.guesses ?? null }
-                : lastGoodGameSnapshot;
-              if (game) {
-                roundEndEmittedRound = endedRound;
-                liveChallengeRound = endedRound;
-                persistState();
-                lastEmittedRoundGameByRound[endedRound] = game;
-                GeoCompanion.emit('roundEnd', {
-                  ...game,
-                  round: endedRound,
-                  _source: duelState ? 'ws-duel-round-timedout' : 'ws-duel-round-timedout-http-fallback',
-                });
-              }
-            }
-          } else if (data.code === 'DuelFinished') {
-            // Contrairement au live challenge (gameEnd trop précoce pour masquer, voir plus bas), DuelFinished masque directement les panneaux (demande explicite).
-            if (gameState !== 'finished') {
-              gameState = 'finished';
-              persistState();
-              GeoCompanion.emit('gameEnd', data.duel?.state || lastGoodGameSnapshot || {});
-            }
-            if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
-          } else if (data.code === 'LiveChallengeLeaderboardUpdate') {
-            // Repli pour garder liveChallengeRound à jour entre deux RoundEnded (utile si un message venait à être manqué).
-            const roundNumber = data.liveChallenge?.leaderboards?.roundGuessTime?.roundNumber;
-            if (typeof roundNumber === 'number' && roundNumber !== liveChallengeRound) {
-              liveChallengeRound = roundNumber;
-              persistState();
-            }
-
-            // Notre guess pour ce round : liveChallenge.leaderboards.round.entries[i] et .guesses[i] se correspondent par index.
-            const roundLeaderboard = data.liveChallenge?.leaderboards?.round;
-            if (
-              roundLeaderboard &&
-              typeof roundLeaderboard.roundNumber === 'number' &&
-              Array.isArray(roundLeaderboard.entries) &&
-              Array.isArray(roundLeaderboard.guesses)
-            ) {
-              const myName = GeoCompanion.getPlayerName?.();
-              if (myName) {
-                const myIndex = roundLeaderboard.entries.findIndex((e) => e && e.name === myName);
-                const myGuess = myIndex !== -1 ? roundLeaderboard.guesses[myIndex] : null;
-                const myEntry = myIndex !== -1 ? roundLeaderboard.entries[myIndex] : null;
-                if (myGuess) {
-                  const roundNum = roundLeaderboard.roundNumber;
-                  const hadGuessBefore = wsOwnGuessByRound[roundNum] != null;
-                  // Score parfois absent du guess même via HTTP (même souci racine que country_code/actual_lat) — plusieurs replis testés.
-                  const myScore =
-                    myGuess.score ??
-                    myGuess.roundScoreInPoints ??
-                    myGuess.points ??
-                    myEntry?.score ??
-                    myEntry?.roundScore ??
-                    myEntry?.totalScore ??
-                    null;
-                  if (myScore == null) {
-                    console.log(
-                      '[GeoCompanion] 🔎 Score introuvable dans le guess WS, structure brute (aide au debug) — guess:',
-                      JSON.stringify(myGuess),
-                      '| entry:',
-                      JSON.stringify(myEntry)
-                    );
-                  }
-                  wsOwnGuessByRound[roundNum] = {
-                    lat: myGuess.lat,
-                    lng: myGuess.lng,
-                    distanceMeters: myGuess.distance,
-                    score: myScore,
-                  };
-
-                  // Cas particulier : ce guess arrive après le roundEnd déjà traité (joueur qui n'a pas cliqué à temps) — on met à jour et ré-émet.
-                  if (!hadGuessBefore && roundEndEmittedRound === roundNum && lastEmittedRoundGameByRound[roundNum]) {
-                    const previousGame = lastEmittedRoundGameByRound[roundNum];
-                    const updatedGame = {
-                      ...previousGame,
-                      guesses: [
-                        {
-                          ...(previousGame.guesses?.[0] || {}),
-                          lat: myGuess.lat,
-                          lng: myGuess.lng,
-                          distanceInMeters: myGuess.distance,
-                          ...(myScore != null ? { roundScoreInPoints: myScore } : {}),
-                        },
-                      ],
-                    };
-                    lastEmittedRoundGameByRound[roundNum] = updatedGame;
-                    GeoCompanion.emit('roundEnd', {
-                      ...updatedGame,
-                      round: roundNum,
-                      _source: 'ws-late-guess-update',
-                    });
-                  }
-                }
-              }
+          const handler = WS_HANDLERS[data.code];
+          if (handler && !data.code.startsWith('_')) {
+            try {
+              handler(data);
+            } catch (e) {
+              console.error(`[GeoCompanion] Erreur dans le handler WS "${data.code}"`, e);
             }
           }
         });
@@ -893,10 +1070,18 @@
   })();
 
   // MODULE: identity
+  // Sources du pseudo, par ordre de fiabilité :
+  //   1. API "/api/v3/profiles" interceptée par apiDetectionModule (event "playerNameFromApi") — fait autorité,
+  //      y compris pour corriger un pseudo en cache devenu obsolète (changement de pseudo, changement de compte).
+  //   2. Scraping DOM du header (sélecteur de classe hashée) — repli si l'API n'a pas encore répondu.
+  //   3. Saisie manuelle (prompt) — dernier recours si rien après 15s.
   (function identityModule() {
     const STORAGE_KEY = 'geoCompanion_playerName';
     let cachedName = GM_getValue(STORAGE_KEY, null);
     let observer = null;
+    let promptTimer = null;
+    // Vrai dès que l'API a fourni le pseudo : coupe les replis (DOM/prompt) et empêche le DOM de ré-écraser.
+    let confirmedByApi = false;
 
     // Sélecteur best-effort sur le header GeoGuessr (span class="nick_nick__XXXXX") — le suffixe hashé peut changer avec leurs déploiements.
     function detectPlayerNameFromDom() {
@@ -905,20 +1090,36 @@
       return name || null;
     }
 
-    function setPlayerName(name) {
-      if (!name || name === cachedName) return;
-      cachedName = name;
-      GM_setValue(STORAGE_KEY, name);
-      console.log('[GeoCompanion] 👤 Joueur identifié :', name);
+    function stopFallbacks() {
       if (observer) {
-        observer.disconnect(); // plus besoin de surveiller une fois trouvé
+        observer.disconnect();
         observer = null;
+      }
+      if (promptTimer) {
+        clearTimeout(promptTimer);
+        promptTimer = null;
       }
     }
 
+    function setPlayerName(name, source) {
+      if (!name) return;
+      // Le pseudo API fait autorité et peut corriger le cache ; les autres sources ne font que combler un vide.
+      if (source !== 'api' && (confirmedByApi || name === cachedName)) return;
+      if (name !== cachedName) {
+        cachedName = name;
+        GM_setValue(STORAGE_KEY, name);
+        console.log(`[GeoCompanion] 👤 Joueur identifié (${source}) :`, name);
+      }
+      if (source === 'api') confirmedByApi = true;
+      stopFallbacks();
+    }
+
+    // Source primaire : pseudo extrait des réponses de l'API profil (voir apiDetectionModule).
+    GeoCompanion.on('playerNameFromApi', (name) => setPlayerName(name, 'api'));
+
     function tryDetect() {
       const name = detectPlayerNameFromDom();
-      if (name) setPlayerName(name);
+      if (name) setPlayerName(name, 'dom');
     }
 
     function askPlayerNameManually() {
@@ -927,7 +1128,7 @@
         "GeoGuessr Companion n'a pas réussi à détecter ton pseudo automatiquement — peux-tu le saisir ?"
       );
       if (answer && answer.trim()) {
-        setPlayerName(answer.trim());
+        setPlayerName(answer.trim(), 'manuel');
       }
     }
 
@@ -939,14 +1140,12 @@
         observer = new MutationObserver(() => tryDetect());
         observer.observe(document.body, { childList: true, subtree: true });
 
-        // Si rien après quelques secondes, on demande manuellement plutôt que de rester bloqué indéfiniment sans pseudo.
-        setTimeout(() => {
-          if (observer) {
-            observer.disconnect();
-            observer = null;
-          }
+        // Dernier recours si ni l'API ni le DOM n'ont rien donné — délai large pour laisser sa chance à l'API
+        // même sur connexion lente (avant : 8s, calibré pour le seul scraping DOM).
+        promptTimer = setTimeout(() => {
+          stopFallbacks();
           askPlayerNameManually();
-        }, 8000);
+        }, 15000);
       }
     }
 
@@ -1043,7 +1242,8 @@
 
   GeoCompanion.supabase = supabaseClient;
 
-  // CORE: reverseGeocode
+  // CORE: reverseGeocode — Nominatim, désormais utilisé uniquement en FALLBACK du géocodeur local ci-dessous
+  // (rate limit 1 req/s, latence réseau, dépendance à un service tiers au moment précis où on veut afficher vite).
   async function reverseGeocodeCountry(lat, lng) {
     try {
       const res = await fetch(
@@ -1059,6 +1259,137 @@
       console.error('[GeoCompanion] Exception reverse-geocoding :', e);
       return null;
     }
+  }
+
+  // CORE: géocodeur local (point-in-polygon)
+  // Résout "quel pays contient ce point" instantanément et hors-ligne, à partir de frontières simplifiées
+  // Natural Earth 110m (~230 Ko, domaine public), téléchargées une fois puis cachées en GM storage.
+  const localGeocoder = (function localGeocoderModule() {
+    const GEOJSON_URL =
+      'https://d2ad6b4ur7yvpq.cloudfront.net/naturalearth-3.3.0/ne_110m_admin_0_countries.geojson';
+    const CACHE_KEY = 'geoCompanion_countriesGeoJsonCache_v1';
+
+    // Bug connu de Natural Earth 110m : quelques pays ont iso_a2 = "-99" (France et Norvège notamment) —
+    // rattrapés par leur nom. Les territoires contestés sans code ISO restent volontairement à null.
+    const NAME_TO_ISO_FALLBACK = {
+      France: 'FR',
+      Norway: 'NO',
+      Kosovo: 'XK',
+    };
+
+    // Features précompilées : { code, bbox: [minLng, minLat, maxLng, maxLat], polygons: [[ring, hole...], ...] }.
+    let compiled = null; // null = pas encore chargé, [] = chargement échoué (fallback Nominatim assumera)
+    let loadingPromise = null;
+
+    function ringBbox(ring, bbox) {
+      for (const [lng, lat] of ring) {
+        if (lng < bbox[0]) bbox[0] = lng;
+        if (lat < bbox[1]) bbox[1] = lat;
+        if (lng > bbox[2]) bbox[2] = lng;
+        if (lat > bbox[3]) bbox[3] = lat;
+      }
+    }
+
+    function compile(geojson) {
+      const features = [];
+      for (const f of geojson.features || []) {
+        const props = f.properties || {};
+        let code = props.iso_a2 && props.iso_a2 !== '-99' ? props.iso_a2.toUpperCase() : null;
+        if (!code) code = NAME_TO_ISO_FALLBACK[props.name] || null;
+        if (!code || !f.geometry) continue;
+
+        // Normalise Polygon -> [coords] pour traiter uniformément avec MultiPolygon.
+        const polygons =
+          f.geometry.type === 'Polygon'
+            ? [f.geometry.coordinates]
+            : f.geometry.type === 'MultiPolygon'
+            ? f.geometry.coordinates
+            : [];
+        if (polygons.length === 0) continue;
+
+        const bbox = [Infinity, Infinity, -Infinity, -Infinity];
+        for (const poly of polygons) ringBbox(poly[0], bbox); // l'anneau extérieur suffit pour la bbox
+        features.push({ code, bbox, polygons });
+      }
+      return features;
+    }
+
+    async function ensureLoaded() {
+      if (compiled) return compiled;
+      if (loadingPromise) return loadingPromise;
+      loadingPromise = (async () => {
+        try {
+          let raw = GM_getValue(CACHE_KEY, null);
+          if (!raw) {
+            const res = await fetch(GEOJSON_URL);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            raw = await res.text();
+            GM_setValue(CACHE_KEY, raw);
+          }
+          compiled = compile(JSON.parse(raw));
+          console.log(`[GeoCompanion] 🗺️ Géocodeur local prêt : ${compiled.length} pays chargés.`);
+        } catch (e) {
+          console.error('[GeoCompanion] Géocodeur local indisponible (fallback Nominatim actif) :', e);
+          compiled = []; // ne pas réessayer en boucle cette session ; Nominatim prend le relais
+        }
+        return compiled;
+      })();
+      return loadingPromise;
+    }
+
+    // Ray casting classique. Coordonnées GeoJSON en [lng, lat].
+    function pointInRing(lng, lat, ring) {
+      let inside = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0];
+        const yi = ring[i][1];
+        const xj = ring[j][0];
+        const yj = ring[j][1];
+        if (yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) {
+          inside = !inside;
+        }
+      }
+      return inside;
+    }
+
+    // Dans le polygone = dans l'anneau extérieur ET dans aucun trou (anneaux intérieurs).
+    function pointInPolygon(lng, lat, polygonRings) {
+      if (!pointInRing(lng, lat, polygonRings[0])) return false;
+      for (let k = 1; k < polygonRings.length; k++) {
+        if (pointInRing(lng, lat, polygonRings[k])) return false;
+      }
+      return true;
+    }
+
+    // Retourne le code ISO A2 du pays contenant le point, ou null si aucun polygone ne matche
+    // (point en mer sur des frontières simplifiées, petite île absente du 110m...).
+    async function resolve(lat, lng) {
+      const features = await ensureLoaded();
+      for (const f of features) {
+        const [minLng, minLat, maxLng, maxLat] = f.bbox;
+        if (lng < minLng || lng > maxLng || lat < minLat || lat > maxLat) continue; // filtre bbox rapide
+        for (const poly of f.polygons) {
+          if (pointInPolygon(lng, lat, poly)) return f.code;
+        }
+      }
+      return null;
+    }
+
+    // Préchargement en tâche de fond dès qu'une partie démarre : le GeoJSON est prêt avant le premier roundEnd.
+    GeoCompanion.on('gameStart', () => {
+      ensureLoaded();
+    });
+
+    return { resolve, ensureLoaded };
+  })();
+
+  // Résolution pays unifiée : locale d'abord (instantané, hors-ligne, sans rate limit), Nominatim en repli
+  // pour les cas hors polygones (côtes/îles absentes des frontières simplifiées 110m).
+  async function countryFromLatLng(lat, lng) {
+    const local = await localGeocoder.resolve(lat, lng);
+    if (local) return local;
+    console.log('[GeoCompanion] 🗺️ Point hors polygones locaux, repli Nominatim.', lat, lng);
+    return reverseGeocodeCountry(lat, lng);
   }
 
   // CORE: geoData (mapping pays -> continent)
@@ -1144,6 +1475,64 @@
     const recordedRoundKeys = new Set();
     GeoCompanion.on('gameStart', () => recordedRoundKeys.clear());
 
+    // ==== Adapters d'extraction par mode ====
+    // Chaque mode déclare OÙ trouver ses données dans l'objet game (chemins confirmés par capture réseau).
+    // detectGameMode choisit l'adapter ; extractRoundData essaie l'adapter du mode détecté PUIS cascade sur
+    // les autres en filet de sécurité (les chemins étant disjoints entre modes, la cascade reproduit
+    // exactement les anciennes chaînes de fallback — zéro régression, mais la structure documente qui est quoi).
+    const MODE_EXTRACTORS = {
+      // Mode classique / challenge : champs à plat sur rounds[i] et guesses imbriqués sous player.
+      classic: {
+        actualLat: (ri) => ri.lat ?? ri.location?.lat,
+        actualLng: (ri) => ri.lng ?? ri.location?.lng,
+        countryCode: (ri) => ri.streakLocationCode ?? ri.countryCode,
+        guessLat: (g) => g.lat ?? g.position?.lat,
+        guessLng: (g) => g.lng ?? g.position?.lng,
+        score: (g) => g.roundScoreInPoints ?? g.score?.amount,
+        distanceMeters: (g) => g.distanceInMeters,
+      },
+      // Live challenge : coordonnées dans answer.coordinateAnswerPayload, pays dans panoramaQuestionPayload
+      // (souvent absent -> résolu par géocodage), score/distance à plat sur le guess.
+      'live-challenge': {
+        actualLat: (ri) => ri.answer?.coordinateAnswerPayload?.coordinate?.lat ?? ri.question?.panoramaQuestionPayload?.panorama?.lat,
+        actualLng: (ri) => ri.answer?.coordinateAnswerPayload?.coordinate?.lng ?? ri.question?.panoramaQuestionPayload?.panorama?.lng,
+        countryCode: (ri) => ri.question?.panoramaQuestionPayload?.panorama?.countryCode,
+        guessLat: (g) => g.lat,
+        guessLng: (g) => g.lng,
+        score: (g) => (typeof g.score === 'number' ? g.score : undefined),
+        distanceMeters: (g) => (typeof g.distance === 'number' ? g.distance : undefined),
+      },
+      // Duel : tout est sur rounds[i].panorama (confirmé par capture réseau) ; guess/score non gérés (demande explicite).
+      duel: {
+        actualLat: (ri) => ri.panorama?.lat,
+        actualLng: (ri) => ri.panorama?.lng,
+        countryCode: (ri) => ri.panorama?.countryCode,
+        guessLat: () => undefined,
+        guessLng: () => undefined,
+        score: () => undefined,
+        distanceMeters: () => undefined,
+      },
+    };
+
+    // Détection du mode, centralisée (avant : conditions ternaires imbriquées inline dans le row).
+    function detectGameMode(game) {
+      if (game._source?.startsWith('ws-duel')) return 'duel';
+      if (game.hostId || game._source?.startsWith('ws-')) return 'live-challenge';
+      return game.mode || game.gameMode || 'classic';
+    }
+
+    // Essaie l'adapter du mode détecté d'abord, puis les autres — première valeur non-nullish retenue.
+    function extractField(fieldName, primaryMode, ...args) {
+      const order = [primaryMode, ...Object.keys(MODE_EXTRACTORS).filter((m) => m !== primaryMode)];
+      for (const mode of order) {
+        const extractor = MODE_EXTRACTORS[mode];
+        if (!extractor) continue;
+        const value = extractor[fieldName](...args);
+        if (value != null) return value;
+      }
+      return null;
+    }
+
     function extractRoundData(game) {
       // Round toujours déjà présent ici : injecté explicitement par le hook WS pour le live challenge, natif pour les autres modes.
       const round = game.round ?? game.roundNumber ?? game.currentRoundNumber;
@@ -1155,36 +1544,24 @@
       const guesses = game.player?.guesses || game.guesses || [];
       const guess = guesses[guesses.length - 1] || {};
 
-      // Live challenge : coordonnées dans answer.coordinateAnswerPayload.coordinate ; duel : directement sur rounds[].panorama (confirmé par capture réseau).
-      const actualLat =
-        roundInfo.lat ??
-        roundInfo.location?.lat ??
-        roundInfo.answer?.coordinateAnswerPayload?.coordinate?.lat ??
-        roundInfo.question?.panoramaQuestionPayload?.panorama?.lat ??
-        roundInfo.panorama?.lat;
-      const actualLng =
-        roundInfo.lng ??
-        roundInfo.location?.lng ??
-        roundInfo.answer?.coordinateAnswerPayload?.coordinate?.lng ??
-        roundInfo.question?.panoramaQuestionPayload?.panorama?.lng ??
-        roundInfo.panorama?.lng;
-      const guessLat = guess.lat ?? guess.position?.lat;
-      const guessLng = guess.lng ?? guess.position?.lng;
-      // Pas de code pays direct en live challenge (juste des coordonnées) — résolu par reverse-geocoding dans le handler roundEnd si besoin.
-      const actualCountryRaw =
-        roundInfo.streakLocationCode ??
-        roundInfo.countryCode ??
-        roundInfo.question?.panoramaQuestionPayload?.panorama?.countryCode ??
-        roundInfo.panorama?.countryCode ??
-        null;
+      const detectedMode = detectGameMode(game);
+      const extractorMode = MODE_EXTRACTORS[detectedMode] ? detectedMode : 'classic';
+
+      const actualLat = extractField('actualLat', extractorMode, roundInfo);
+      const actualLng = extractField('actualLng', extractorMode, roundInfo);
+      const guessLat = extractField('guessLat', extractorMode, guess);
+      const guessLng = extractField('guessLng', extractorMode, guess);
       // Confirmé par capture réseau réelle : ce champ arrive en minuscule en live challenge ("gh", "br"...), d'où l'uppercase forcé.
+      const actualCountryRaw = extractField('countryCode', extractorMode, roundInfo);
       const actualCountry = actualCountryRaw ? actualCountryRaw.toUpperCase() : null;
 
+      const score = extractField('score', extractorMode, guess);
+      const distanceMeters = extractField('distanceMeters', extractorMode, guess);
 
-      // Live challenge : score/distance sont des valeurs directes sur le guess (guess.score, guess.distance), pas imbriquées comme en classique.
-      const score =
-        guess.roundScoreInPoints ?? guess.score?.amount ?? (typeof guess.score === 'number' ? guess.score : null);
-      const distanceMeters = guess.distanceInMeters ?? (typeof guess.distance === 'number' ? guess.distance : null);
+      // game_mode stocké : le mode détecté, sauf pour les modes HTTP dont le nom natif (game.mode/gameMode)
+      // fait autorité — reproduit le comportement précédent à l'identique.
+      const gameMode =
+        game.mode || game.gameMode || (game.hostId ? 'live-challenge' : game._source?.startsWith('ws-duel') ? 'duel' : null);
 
       return {
         player_name: GeoCompanion.getPlayerName(),
@@ -1198,8 +1575,8 @@
         guess_lng: guessLng ?? null,
         score,
         distance_km: distanceMeters != null ? distanceMeters / 1000 : null,
-        country_correct: null, // rempli après coup via reverse-geocoding (voir handler roundEnd)
-        game_mode: game.mode || game.gameMode || (game.hostId ? 'live-challenge' : game._source?.startsWith('ws-duel') ? 'duel' : null),
+        country_correct: null, // rempli après coup via géocodage (voir handler roundEnd)
+        game_mode: gameMode,
         map_id: game.map || game.mapSlug || game.options?.mapSlug || null,
         map_name: game.mapName || null,
         time_remaining_s:
@@ -1225,7 +1602,7 @@
 
       // Certains modes (live challenge) ne fournissent pas le code pays réel directement, seulement des coordonnées à reverse-geocoder.
       if (!row.country_code && row.actual_lat != null && row.actual_lng != null) {
-        const actualCountry = await reverseGeocodeCountry(row.actual_lat, row.actual_lng);
+        const actualCountry = await countryFromLatLng(row.actual_lat, row.actual_lng);
         if (actualCountry) {
           row.country_code = actualCountry;
           row.continent = continentFromCountryCode(actualCountry);
@@ -1237,7 +1614,7 @@
 
       // Déduction du pays deviné via reverse-geocoding des coordonnées du guess.
       if (row.guess_lat != null && row.guess_lng != null && row.country_code) {
-        const guessedCountry = await reverseGeocodeCountry(row.guess_lat, row.guess_lng);
+        const guessedCountry = await countryFromLatLng(row.guess_lat, row.guess_lng);
         if (guessedCountry) {
           row.country_correct = guessedCountry === row.country_code.toUpperCase();
           console.log(
@@ -1266,7 +1643,10 @@
         console.log('[GeoCompanion] Round déjà enregistré, pas de ré-insertion.');
       } else {
         recordedRoundKeys.add(recordKey);
-        const ok = await supabaseClient.insert('rounds', row);
+        // ignoreDuplicates : le vrai filet anti-doublon est l'index unique en base (rounds_unique_round_per_player) —
+        // contrairement au Set ci-dessus, il survit à un rechargement de page. Un doublon post-refresh est ignoré
+        // silencieusement (ON CONFLICT DO NOTHING) au lieu d'être inséré une seconde fois.
+        const ok = await supabaseClient.insert('rounds', row, { ignoreDuplicates: true });
         if (ok) {
           console.log('[GeoCompanion] ✅ Round enregistré dans Supabase');
         }
@@ -1502,6 +1882,30 @@
       });
     }
 
+    // ==== Délégation d'événements ====
+    // Un SEUL listener "click" par panneau, posé une fois (idempotent). Les éléments cliquables portent
+    // data-action (+ data-arg optionnel) ; les handlers sont (ré)enregistrés à chaque render via gcSetActions
+    // avec les closures à jour. Remplace l'ancien pattern innerHTML + re-binding manuel de chaque bouton,
+    // source récurrente de bugs (listener attaché à un élément recréé entre-temps, bouton conditionnel absent).
+    function gcDelegate(panel) {
+      if (panel._gcDelegated) return;
+      panel._gcDelegated = true;
+      panel._gcActions = {};
+      panel.addEventListener('click', (e) => {
+        const el = e.target.closest('[data-action]');
+        if (!el || !panel.contains(el)) return;
+        const handler = panel._gcActions[el.dataset.action];
+        if (handler) handler(el.dataset.arg, el, e);
+      });
+    }
+
+    // reset:true (render racine d'un panneau) repart d'un registre vide ; sinon merge (sous-sections et
+    // formulaires inline ajoutent leurs actions sans écraser celles des sections sœurs).
+    function gcSetActions(panel, actions, { reset = false } = {}) {
+      gcDelegate(panel);
+      panel._gcActions = reset ? { ...actions } : { ...panel._gcActions, ...actions };
+    }
+
     function countryNameFromCode(code) {
       try {
         return new Intl.DisplayNames(['fr'], { type: 'region' }).of(code.toUpperCase()) || code;
@@ -1628,7 +2032,7 @@
           </div>
         </div>
         <hr class="gc-hr">
-        <button id="geo-companion-toggle-stats-btn" class="gc-btn gc-btn--stats-toggle">📊 Voir les stats</button>
+        <button data-action="toggle-stats" class="gc-btn gc-btn--stats-toggle">📊 Voir les stats</button>
         <div id="geo-companion-stats-section" class="gc-stats-section gc-collapsed">
           <div id="geo-companion-stats">Chargement des statistiques…</div>
           <hr class="gc-hr">
@@ -1661,7 +2065,7 @@
         <div class="gc-btn-row gc-mb-10">
           ${FILTERS.map(
             (f) => `
-            <button data-filter="${f.key}" class="gc-btn gc-btn--flex gc-btn--lg ${
+            <button data-action="stats-filter" data-arg="${f.key}" class="gc-btn gc-btn--flex gc-btn--lg ${
               f.key === activeFilter ? 'gc-btn--jouer' : 'gc-btn--secondary'
             }">${f.label}</button>
           `
@@ -1670,8 +2074,8 @@
         <div id="geo-companion-stats-body" class="gc-muted">Chargement…</div>
       `;
 
-      container.querySelectorAll('button[data-filter]').forEach((btn) => {
-        btn.addEventListener('click', () => renderStats(row, btn.dataset.filter, cache));
+      gcSetActions(ensurePanel(), {
+        'stats-filter': (filterKey) => renderStats(row, filterKey, cache),
       });
 
       // Cache par filtre temporel, propre à ce round affiché : changer de filtre puis revenir dessus ne refait pas d'appel réseau.
@@ -1770,8 +2174,8 @@
 
     function tipHtml(tip) {
       const buttonsHtml = `
-        <button data-edit-tip="${tip.id}" class="gc-btn gc-btn--edit-tip" title="Modifier">✏️</button>
-        <button data-delete-tip="${tip.id}" class="gc-btn gc-btn--delete-tip" title="Supprimer">🗑️</button>
+        <button data-action="edit-tip" data-arg="${tip.id}" class="gc-btn gc-btn--edit-tip" title="Modifier">✏️</button>
+        <button data-action="delete-tip" data-arg="${tip.id}" class="gc-btn gc-btn--delete-tip" title="Supprimer">🗑️</button>
       `;
 
       return `
@@ -1791,7 +2195,7 @@
       `;
     }
 
-    function showTipForm(tipsPanel, row, tip) {
+    function showTipForm(tipsPanel, row, tip, targetPanel) {
       const formContainer = tipsPanel.querySelector('#geo-companion-tip-form');
       if (!formContainer) return;
 
@@ -1804,34 +2208,34 @@
             tip ? tip.image_url || '' : ''
           }" class="gc-input gc-input--compact">
           <div class="gc-btn-row gc-mt-6">
-            <button id="geo-companion-tip-save" class="gc-btn gc-btn--ok">Enregistrer</button>
-            <button id="geo-companion-tip-cancel" class="gc-btn gc-btn--cancel">Annuler</button>
+            <button data-action="tip-save" class="gc-btn gc-btn--ok">Enregistrer</button>
+            <button data-action="tip-cancel" class="gc-btn gc-btn--cancel">Annuler</button>
           </div>
         </div>
       `;
 
-      const textEl = formContainer.querySelector('#geo-companion-tip-text');
-      const imageEl = formContainer.querySelector('#geo-companion-tip-image');
       // Empêche GeoGuessr de capter les touches tapées ici comme des raccourcis.
-      stopKeyPropagation(textEl);
-      stopKeyPropagation(imageEl);
+      stopKeyPropagation(formContainer.querySelector('#geo-companion-tip-text'));
+      stopKeyPropagation(formContainer.querySelector('#geo-companion-tip-image'));
 
-      formContainer.querySelector('#geo-companion-tip-cancel').addEventListener('click', () => {
-        formContainer.innerHTML = '';
-      });
+      // Merge dans le registre du panneau (les actions racine de renderTips restent actives).
+      gcSetActions(tipsPanel, {
+        'tip-cancel': () => {
+          formContainer.innerHTML = '';
+        },
+        'tip-save': async () => {
+          const content = formContainer.querySelector('#geo-companion-tip-text').value.trim();
+          const imageUrl = formContainer.querySelector('#geo-companion-tip-image').value.trim();
+          if (!content && !imageUrl) return; // rien à enregistrer
 
-      formContainer.querySelector('#geo-companion-tip-save').addEventListener('click', async () => {
-        const content = textEl.value.trim();
-        const imageUrl = imageEl.value.trim();
-        if (!content && !imageUrl) return; // rien à enregistrer
-
-        if (tip) {
-          await GeoCompanion.tips.updateTip(tip.id, { content, imageUrl });
-        } else {
-          await GeoCompanion.tips.addTip(row.country_code, { content, imageUrl });
-        }
-        formContainer.innerHTML = '';
-        await renderTips(row);
+          if (tip) {
+            await GeoCompanion.tips.updateTip(tip.id, { content, imageUrl });
+          } else {
+            await GeoCompanion.tips.addTip(row.country_code, { content, imageUrl });
+          }
+          formContainer.innerHTML = '';
+          await renderTips(row, targetPanel);
+        },
       });
     }
 
@@ -1861,15 +2265,15 @@
             }
           </div>
           <div class="gc-flex-gap-6">
-            <button id="geo-companion-tips-refresh-btn" title="Actualiser les tips" class="gc-btn gc-icon-btn gc-fs-16">🔄</button>
+            <button data-action="tips-refresh" title="Actualiser les tips" class="gc-btn gc-icon-btn gc-fs-16">🔄</button>
             ${
               row.game_mode === 'indices-view'
                 ? ''
-                : '<button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-icon-btn gc-fs-18">▼</button>'
+                : '<button data-action="tips-collapse" title="Replier/déplier" class="gc-btn gc-icon-btn gc-fs-18">▼</button>'
             }
             ${
               row.game_mode === 'indices-view'
-                ? `<button id="geo-companion-tips-back-to-map-btn" title="Retour à la carte" class="gc-btn gc-icon-btn gc-fs-18">◀</button>`
+                ? `<button data-action="tips-back-to-map" title="Retour à la carte" class="gc-btn gc-icon-btn gc-fs-18">◀</button>`
                 : ''
             }
           </div>
@@ -1887,50 +2291,43 @@
                 : `<div class="gc-grid-2">${tips.map(tipHtml).join('')}</div>`
             }
           </div>
-          <button id="geo-companion-add-tip-btn" class="gc-btn gc-add-tip-btn">+ Ajouter un tip</button>
+          <button data-action="add-tip" class="gc-btn gc-add-tip-btn">+ Ajouter un tip</button>
           <div id="geo-companion-tip-form" class="gc-shrink-0"></div>
         </div>
       `;
 
+      // Registre racine du panneau : reset:true repart à zéro, les sous-sections (champs pays/voiture/route)
+      // et les formulaires inline mergeront leurs actions par-dessus.
+      gcSetActions(
+        tipsPanel,
+        {
+          'tips-refresh': async (_arg, btn) => {
+            btn.disabled = true;
+            await renderTips(row, targetPanel);
+          },
+          'tips-collapse': (_arg, btn) => {
+            const tipsBody = tipsPanel.querySelector('#geo-companion-tips-body');
+            const nowCollapsed = tipsBody.classList.toggle('gc-collapsed');
+            btn.textContent = nowCollapsed ? '▶' : '▼';
+          },
+          'tips-back-to-map': () => returnToIndicesMap(),
+          'edit-tip': (tipId) => {
+            const tip = tips.find((t) => t.id === tipId);
+            showTipForm(tipsPanel, row, tip, targetPanel);
+          },
+          'delete-tip': async (tipId) => {
+            if (!confirm('Supprimer ce tip ?')) return;
+            await GeoCompanion.tips.deleteTip(tipId);
+            await renderTips(row, targetPanel);
+          },
+          'add-tip': () => showTipForm(tipsPanel, row, null, targetPanel),
+        },
+        { reset: true }
+      );
+
       renderCountryInfoFields(tipsPanel, row, info);
       renderVoitureField(tipsPanel, row, info);
       renderRouteField(tipsPanel, row, info);
-
-      const collapseBtn = tipsPanel.querySelector('#geo-companion-tips-collapse-btn');
-      const tipsBody = tipsPanel.querySelector('#geo-companion-tips-body');
-      if (collapseBtn) {
-        collapseBtn.addEventListener('click', () => {
-          const nowCollapsed = tipsBody.classList.toggle('gc-collapsed');
-          collapseBtn.textContent = nowCollapsed ? '▶' : '▼';
-        });
-      }
-
-      const refreshBtn = tipsPanel.querySelector('#geo-companion-tips-refresh-btn');
-      refreshBtn.addEventListener('click', async () => {
-        refreshBtn.disabled = true;
-        await renderTips(row);
-      });
-
-      const backToMapBtn = tipsPanel.querySelector('#geo-companion-tips-back-to-map-btn');
-      if (backToMapBtn) backToMapBtn.addEventListener('click', returnToIndicesMap);
-
-      tipsPanel.querySelectorAll('[data-edit-tip]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const tip = tips.find((t) => t.id === btn.dataset.editTip);
-          showTipForm(tipsPanel, row, tip);
-        });
-      });
-
-      tipsPanel.querySelectorAll('[data-delete-tip]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          if (!confirm('Supprimer ce tip ?')) return;
-          await GeoCompanion.tips.deleteTip(btn.dataset.deleteTip);
-          await renderTips(row);
-        });
-      });
-
-      const addBtn = tipsPanel.querySelector('#geo-companion-add-tip-btn');
-      if (addBtn) addBtn.addEventListener('click', () => showTipForm(tipsPanel, row, null));
     }
 
     function drivingSideLabel(side) {
@@ -1952,10 +2349,10 @@
           <div class="gc-card-header">
             <span class="gc-label">Route 🚗 ${drivingSideLabel(info.driving_side)}</span>
             <div class="gc-flex-gap-6">
-              <button data-toggle-no-clue-route class="gc-btn gc-btn--toggle-no-clue ${
+              <button data-action="toggle-no-clue-route" class="gc-btn gc-btn--toggle-no-clue ${
                 noClue ? 'gc-btn--toggle-no-clue--active' : ''
               }" title="${noClue ? 'Annuler : pas d’indice' : 'Marquer : pas d’indice dans cette catégorie'}">🚫</button>
-              <button data-edit-route class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
+              <button data-action="edit-route" class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
             </div>
           </div>
           <div data-route-display class="gc-mt-2">
@@ -1978,70 +2375,65 @@
         </div>
       `;
 
-      container.querySelector('[data-toggle-no-clue-route]').addEventListener('click', async () => {
-        if (noClue) {
-          await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, { route_text: null });
-        } else {
-          await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, {
-            route_text: NO_CLUE_MARKER,
-            route_image_url: null,
-          });
-        }
-        const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
-        renderRouteField(tipsPanel, row, updated);
-      });
-
-      container.querySelector('[data-edit-route]').addEventListener('click', () => {
-        const formEl = container.querySelector('[data-route-form]');
-        formEl.innerHTML = `
-          <input type="text" data-route-text value="${escapeHtml(
-            noClue ? '' : info.route_text || ''
-          )}" placeholder="Texte (marquage, bornes...)" class="gc-input gc-input--compact">
-          <input type="text" data-route-image value="${escapeHtml(
-            info.route_image_url || ''
-          )}" placeholder="URL de l'image (optionnel)" class="gc-input gc-input--compact">
-          <div class="gc-btn-row gc-mt-6">
-            <button data-route-side="left" class="gc-btn gc-btn--flex gc-driving-btn ${
-              info.driving_side === 'left' ? 'gc-driving-btn--active' : ''
-            }">⬅️ Gauche</button>
-            <button data-route-side="right" class="gc-btn gc-btn--flex gc-driving-btn ${
-              info.driving_side === 'right' ? 'gc-driving-btn--active' : ''
-            }">➡️ Droite</button>
-          </div>
-          <div class="gc-btn-row gc-mt-6">
-            <button data-save-route class="gc-btn gc-btn--ok">OK</button>
-            <button data-cancel-route class="gc-btn gc-btn--cancel">Annuler</button>
-          </div>
-        `;
-
-        let selectedSide = info.driving_side || null;
-        const textEl = formEl.querySelector('[data-route-text]');
-        const imageEl = formEl.querySelector('[data-route-image]');
-        stopKeyPropagation(textEl);
-        stopKeyPropagation(imageEl);
-
-        formEl.querySelectorAll('[data-route-side]').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            selectedSide = btn.dataset.routeSide;
-            formEl.querySelectorAll('[data-route-side]').forEach((b) => {
-              b.classList.toggle('gc-driving-btn--active', b.dataset.routeSide === selectedSide);
+      gcSetActions(tipsPanel, {
+        'toggle-no-clue-route': async () => {
+          if (noClue) {
+            await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, { route_text: null });
+          } else {
+            await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, {
+              route_text: NO_CLUE_MARKER,
+              route_image_url: null,
             });
+          }
+          const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
+          renderRouteField(tipsPanel, row, updated);
+        },
+        'edit-route': () => {
+          const formEl = container.querySelector('[data-route-form]');
+          formEl.innerHTML = `
+            <input type="text" data-route-text value="${escapeHtml(
+              noClue ? '' : info.route_text || ''
+            )}" placeholder="Texte (marquage, bornes...)" class="gc-input gc-input--compact">
+            <input type="text" data-route-image value="${escapeHtml(
+              info.route_image_url || ''
+            )}" placeholder="URL de l'image (optionnel)" class="gc-input gc-input--compact">
+            <div class="gc-btn-row gc-mt-6">
+              <button data-action="route-side" data-arg="left" class="gc-btn gc-btn--flex gc-driving-btn ${
+                info.driving_side === 'left' ? 'gc-driving-btn--active' : ''
+              }">⬅️ Gauche</button>
+              <button data-action="route-side" data-arg="right" class="gc-btn gc-btn--flex gc-driving-btn ${
+                info.driving_side === 'right' ? 'gc-driving-btn--active' : ''
+              }">➡️ Droite</button>
+            </div>
+            <div class="gc-btn-row gc-mt-6">
+              <button data-action="save-route" class="gc-btn gc-btn--ok">OK</button>
+              <button data-action="cancel-route" class="gc-btn gc-btn--cancel">Annuler</button>
+            </div>
+          `;
+          stopKeyPropagation(formEl.querySelector('[data-route-text]'));
+          stopKeyPropagation(formEl.querySelector('[data-route-image]'));
+        },
+        // Le sens sélectionné vit dans le DOM (classe active) plutôt que dans une variable : le save le relit au clic.
+        'route-side': (side) => {
+          container.querySelectorAll('[data-action="route-side"]').forEach((b) => {
+            b.classList.toggle('gc-driving-btn--active', b.dataset.arg === side);
           });
-        });
-
-        formEl.querySelector('[data-cancel-route]').addEventListener('click', () => {
-          formEl.innerHTML = '';
-        });
-
-        formEl.querySelector('[data-save-route]').addEventListener('click', async () => {
+        },
+        'cancel-route': () => {
+          const formEl = container.querySelector('[data-route-form]');
+          if (formEl) formEl.innerHTML = '';
+        },
+        'save-route': async () => {
+          const formEl = container.querySelector('[data-route-form]');
+          const activeSideBtn = formEl.querySelector('[data-action="route-side"].gc-driving-btn--active');
           await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, {
-            route_text: textEl.value.trim() || null,
-            route_image_url: imageEl.value.trim() || null,
-            driving_side: selectedSide,
+            route_text: formEl.querySelector('[data-route-text]').value.trim() || null,
+            route_image_url: formEl.querySelector('[data-route-image]').value.trim() || null,
+            driving_side: activeSideBtn ? activeSideBtn.dataset.arg : info.driving_side || null,
           });
           const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
           renderRouteField(tipsPanel, row, updated);
-        });
+        },
       });
     }
 
@@ -2098,10 +2490,10 @@
               <div class="gc-card-header">
                 <span class="gc-label">${f.label}</span>
                 <div class="gc-flex-gap-6">
-                  <button data-toggle-no-clue="${f.key}" class="gc-btn gc-btn--toggle-no-clue ${
+                  <button data-action="toggle-no-clue" data-arg="${f.key}" class="gc-btn gc-btn--toggle-no-clue ${
               noClue ? 'gc-btn--toggle-no-clue--active' : ''
             }" title="${noClue ? 'Annuler : pas d’indice' : 'Marquer : pas d’indice dans cette catégorie'}">🚫</button>
-                  <button data-edit-field="${f.key}" class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
+                  <button data-action="edit-field" data-arg="${f.key}" class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
                 </div>
               </div>
               <div data-field-display="${f.key}" class="gc-mt-2">${countryInfoFieldDisplay(f, info[f.key])}</div>
@@ -2112,19 +2504,16 @@
         </div>
       `;
 
-      container.querySelectorAll('[data-toggle-no-clue]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const key = btn.dataset.toggleNoClue;
+      // Handlers génériques : la clé du champ voyage via data-arg, ce qui permet à plusieurs formulaires
+      // d'être ouverts simultanément sans conflit (le save retrouve SON formulaire par la clé).
+      gcSetActions(tipsPanel, {
+        'toggle-no-clue': async (key) => {
           const newValue = isNoClue(info[key]) ? null : NO_CLUE_MARKER;
           await GeoCompanion.countryInfo.setCountryInfoField(row.country_code, key, newValue);
           const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
           renderCountryInfoFields(tipsPanel, row, updated);
-        });
-      });
-
-      container.querySelectorAll('[data-edit-field]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const key = btn.dataset.editField;
+        },
+        'edit-field': (key) => {
           const fieldConfig = COUNTRY_INFO_FIELDS.find((f) => f.key === key);
           const formEl = container.querySelector(`[data-field-form="${key}"]`);
           const currentValue = isNoClue(info[key]) ? '' : info[key] || '';
@@ -2134,8 +2523,8 @@
 
           const actionsHtml = `
             <div class="gc-btn-row gc-mt-4">
-              <button data-save-field class="gc-btn gc-btn--ok">OK</button>
-              <button data-cancel-field class="gc-btn gc-btn--cancel">Annuler</button>
+              <button data-action="save-field" data-arg="${key}" class="gc-btn gc-btn--ok">OK</button>
+              <button data-action="cancel-field" data-arg="${key}" class="gc-btn gc-btn--cancel">Annuler</button>
             </div>
           `;
 
@@ -2155,28 +2544,31 @@
               ${actionsHtml}
             `;
 
-          const inputEl = formEl.querySelector(isTextarea ? 'textarea' : 'input');
-          stopKeyPropagation(inputEl);
-
-          formEl.querySelector('[data-cancel-field]').addEventListener('click', () => {
-            formEl.innerHTML = '';
-          });
-
-          formEl.querySelector('[data-save-field]').addEventListener('click', async () => {
-            const value = isMultiUrl
-              ? inputEl.value
-                  .split('\n')
-                  .map((u) => u.trim())
-                  .filter(Boolean)
-                  .join('\n')
-              : isFreeText
-              ? inputEl.value.replace(/\n{3,}/g, '\n\n').trim() // garde les sauts de ligne, juste évite les blocs vides à rallonge
-              : inputEl.value.trim();
-            await GeoCompanion.countryInfo.setCountryInfoField(row.country_code, key, value || null);
-            const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
-            renderCountryInfoFields(tipsPanel, row, updated);
-          });
-        });
+          stopKeyPropagation(formEl.querySelector(isTextarea ? 'textarea' : 'input'));
+        },
+        'cancel-field': (key) => {
+          const formEl = container.querySelector(`[data-field-form="${key}"]`);
+          if (formEl) formEl.innerHTML = '';
+        },
+        'save-field': async (key) => {
+          const fieldConfig = COUNTRY_INFO_FIELDS.find((f) => f.key === key);
+          const formEl = container.querySelector(`[data-field-form="${key}"]`);
+          const isMultiUrl = fieldConfig.type === 'images';
+          const isFreeText = fieldConfig.type === 'multitext';
+          const inputEl = formEl.querySelector(isMultiUrl || isFreeText ? 'textarea' : 'input');
+          const value = isMultiUrl
+            ? inputEl.value
+                .split('\n')
+                .map((u) => u.trim())
+                .filter(Boolean)
+                .join('\n')
+            : isFreeText
+            ? inputEl.value.replace(/\n{3,}/g, '\n\n').trim() // garde les sauts de ligne, juste évite les blocs vides à rallonge
+            : inputEl.value.trim();
+          await GeoCompanion.countryInfo.setCountryInfoField(row.country_code, key, value || null);
+          const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
+          renderCountryInfoFields(tipsPanel, row, updated);
+        },
       });
     }
 
@@ -2199,10 +2591,10 @@
           <div class="gc-card-header">
             <span class="gc-label">Voiture</span>
             <div class="gc-flex-gap-6">
-              <button data-toggle-no-clue-voiture class="gc-btn gc-btn--toggle-no-clue ${
+              <button data-action="toggle-no-clue-voiture" class="gc-btn gc-btn--toggle-no-clue ${
                 noClue ? 'gc-btn--toggle-no-clue--active' : ''
               }" title="${noClue ? 'Annuler : pas d’indice' : 'Marquer : pas d’indice dans cette catégorie'}">🚫</button>
-              <button data-edit-voiture class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
+              <button data-action="edit-voiture" class="gc-btn gc-icon-btn" title="Modifier">✏️</button>
             </div>
           </div>
           <div data-voiture-display class="gc-mt-2">
@@ -2226,58 +2618,55 @@
         </div>
       `;
 
-      container.querySelector('[data-toggle-no-clue-voiture]').addEventListener('click', async () => {
-        if (noClue) {
-          await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, { voiture_text: null });
-        } else {
+      gcSetActions(tipsPanel, {
+        'toggle-no-clue-voiture': async () => {
+          if (noClue) {
+            await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, { voiture_text: null });
+          } else {
+            await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, {
+              voiture_text: NO_CLUE_MARKER,
+              voiture_image_url: null,
+              voiture_exclusive: null,
+            });
+          }
+          const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
+          renderVoitureField(tipsPanel, row, updated);
+        },
+        'edit-voiture': () => {
+          const formEl = container.querySelector('[data-voiture-form]');
+          formEl.innerHTML = `
+            <input type="text" data-voiture-text value="${escapeHtml(
+              noClue ? '' : info.voiture_text || ''
+            )}" placeholder="Texte (marque, modèle...)" class="gc-input gc-input--compact">
+            <input type="text" data-voiture-image value="${escapeHtml(
+              info.voiture_image_url || ''
+            )}" placeholder="URL de l'image (optionnel)" class="gc-input gc-input--compact">
+            <label class="gc-checkbox-label">
+              <input type="checkbox" data-voiture-exclusive ${info.voiture_exclusive ? 'checked' : ''}>
+              Exclusif au pays
+            </label>
+            <div class="gc-btn-row gc-mt-6">
+              <button data-action="save-voiture" class="gc-btn gc-btn--ok">OK</button>
+              <button data-action="cancel-voiture" class="gc-btn gc-btn--cancel">Annuler</button>
+            </div>
+          `;
+          stopKeyPropagation(formEl.querySelector('[data-voiture-text]'));
+          stopKeyPropagation(formEl.querySelector('[data-voiture-image]'));
+        },
+        'cancel-voiture': () => {
+          const formEl = container.querySelector('[data-voiture-form]');
+          if (formEl) formEl.innerHTML = '';
+        },
+        'save-voiture': async () => {
+          const formEl = container.querySelector('[data-voiture-form]');
           await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, {
-            voiture_text: NO_CLUE_MARKER,
-            voiture_image_url: null,
-            voiture_exclusive: null,
-          });
-        }
-        const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
-        renderVoitureField(tipsPanel, row, updated);
-      });
-
-      container.querySelector('[data-edit-voiture]').addEventListener('click', () => {
-        const formEl = container.querySelector('[data-voiture-form]');
-        formEl.innerHTML = `
-          <input type="text" data-voiture-text value="${escapeHtml(
-            noClue ? '' : info.voiture_text || ''
-          )}" placeholder="Texte (marque, modèle...)" class="gc-input gc-input--compact">
-          <input type="text" data-voiture-image value="${escapeHtml(
-            info.voiture_image_url || ''
-          )}" placeholder="URL de l'image (optionnel)" class="gc-input gc-input--compact">
-          <label class="gc-checkbox-label">
-            <input type="checkbox" data-voiture-exclusive ${info.voiture_exclusive ? 'checked' : ''}>
-            Exclusif au pays
-          </label>
-          <div class="gc-btn-row gc-mt-6">
-            <button data-save-voiture class="gc-btn gc-btn--ok">OK</button>
-            <button data-cancel-voiture class="gc-btn gc-btn--cancel">Annuler</button>
-          </div>
-        `;
-
-        const textEl = formEl.querySelector('[data-voiture-text]');
-        const imageEl = formEl.querySelector('[data-voiture-image]');
-        stopKeyPropagation(textEl);
-        stopKeyPropagation(imageEl);
-
-        formEl.querySelector('[data-cancel-voiture]').addEventListener('click', () => {
-          formEl.innerHTML = '';
-        });
-
-        formEl.querySelector('[data-save-voiture]').addEventListener('click', async () => {
-          const exclusiveEl = formEl.querySelector('[data-voiture-exclusive]');
-          await GeoCompanion.countryInfo.setCountryInfoFields(row.country_code, {
-            voiture_text: textEl.value.trim() || null,
-            voiture_image_url: imageEl.value.trim() || null,
-            voiture_exclusive: exclusiveEl.checked,
+            voiture_text: formEl.querySelector('[data-voiture-text]').value.trim() || null,
+            voiture_image_url: formEl.querySelector('[data-voiture-image]').value.trim() || null,
+            voiture_exclusive: formEl.querySelector('[data-voiture-exclusive]').checked,
           });
           const updated = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
           renderVoitureField(tipsPanel, row, updated);
-        });
+        },
       });
     }
 
@@ -2290,25 +2679,29 @@
 
       // Les stats (et donc la requête Supabase) ne sont chargées que si l'utilisateur clique explicitement sur le bouton.
       const statsCache = new Map(); // propre à cet affichage de round
-      const toggleBtn = document.getElementById('geo-companion-toggle-stats-btn');
-      const statsSection = document.getElementById('geo-companion-stats-section');
-      if (toggleBtn && statsSection) {
-        let loaded = false;
-        toggleBtn.addEventListener('click', async () => {
-          const isHidden = statsSection.classList.contains('gc-collapsed');
-          if (isHidden) {
-            statsSection.classList.remove('gc-collapsed');
-            toggleBtn.textContent = '📊 Masquer les stats';
-            if (!loaded) {
-              loaded = true;
-              await renderStats(row, 'all', statsCache);
+      let statsLoaded = false;
+      gcSetActions(
+        panel,
+        {
+          'toggle-stats': async (_arg, btn) => {
+            const statsSection = document.getElementById('geo-companion-stats-section');
+            if (!statsSection) return;
+            const isHidden = statsSection.classList.contains('gc-collapsed');
+            if (isHidden) {
+              statsSection.classList.remove('gc-collapsed');
+              btn.textContent = '📊 Masquer les stats';
+              if (!statsLoaded) {
+                statsLoaded = true;
+                await renderStats(row, 'all', statsCache);
+              }
+            } else {
+              statsSection.classList.add('gc-collapsed');
+              btn.textContent = '📊 Voir les stats';
             }
-          } else {
-            statsSection.classList.add('gc-collapsed');
-            toggleBtn.textContent = '📊 Voir les stats';
-          }
-        });
-      }
+          },
+        },
+        { reset: true }
+      );
     }
 
     // Persiste quel round est actuellement affiché (ou "aucun"), pour restaurer l'affichage si la page est rechargée entre la fin d'un round et le suivant.
@@ -2524,15 +2917,16 @@ function ensureDashboard() {
       listEl.innerHTML = `
         <div class="gc-empty-state">
           <div class="gc-mb-10-fs-13">Aucune donnée chargée pour cette période.</div>
-          <button id="geo-companion-dashboard-refresh-btn" class="gc-btn gc-btn--jouer gc-btn--refresh-dash">🔄 Actualiser</button>
+          <button data-action="dash-refresh" class="gc-btn gc-btn--jouer gc-btn--refresh-dash">🔄 Actualiser</button>
         </div>
       `;
 
-      const refreshBtn = listEl.querySelector('#geo-companion-dashboard-refresh-btn');
-      refreshBtn.addEventListener('click', async () => {
-        refreshBtn.disabled = true;
-        refreshBtn.textContent = '⏳';
-        await loadDashboardFilterData(playerName);
+      gcSetActions(ensureDashboard(), {
+        'dash-refresh': async (_arg, btn) => {
+          btn.disabled = true;
+          btn.textContent = '⏳';
+          await loadDashboardFilterData(playerName);
+        },
       });
     }
 
@@ -2544,8 +2938,8 @@ function ensureDashboard() {
         <div class="gc-card-header gc-mb-6 gc-shrink-0">
           <div class="gc-title gc-fs-16">Mes stats</div>
           <div class="gc-flex-gap-6">
-            <button id="geo-companion-dashboard-delete-btn" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--delete-dash">🗑️</button>
-            <button id="geo-companion-dashboard-collapse-btn" title="Replier/déplier" class="gc-btn gc-btn--collapse-dash">${
+            <button data-action="dash-delete" title="Supprimer mes rounds de la période sélectionnée" class="gc-btn gc-btn--delete-dash">🗑️</button>
+            <button data-action="dash-collapse" title="Replier/déplier" class="gc-btn gc-btn--collapse-dash">${
               dashboardCollapsed ? '▶' : '▼'
             }</button>
           </div>
@@ -2555,7 +2949,7 @@ function ensureDashboard() {
           <div class="gc-btn-row gc-mb-8 gc-shrink-0">
             ${FILTERS.map(
               (f) => `
-              <button data-dash-filter="${f.key}" class="gc-btn gc-btn--flex gc-btn--xs ${
+              <button data-action="dash-filter" data-arg="${f.key}" class="gc-btn gc-btn--flex gc-btn--xs ${
                 f.key === dashboardActiveFilter ? 'gc-btn--jouer' : 'gc-btn--secondary'
               }">${f.label}</button>
             `
@@ -2564,7 +2958,7 @@ function ensureDashboard() {
           <div class="gc-btn-row gc-btn-row--wrap gc-mb-10 gc-shrink-0">
             ${CONTINENT_ORDER.map(
               (c) => `
-              <button data-dash-continent="${c}" class="gc-btn gc-btn--flex-auto gc-btn--xs gc-continent-btn ${
+              <button data-action="dash-continent" data-arg="${c}" class="gc-btn gc-btn--flex-auto gc-btn--xs gc-continent-btn ${
                 c === dashboardActiveContinent ? 'gc-btn--jouer' : 'gc-btn--secondary'
               }">${CONTINENT_LABELS[c]}</button>
             `
@@ -2574,58 +2968,52 @@ function ensureDashboard() {
         </div>
       `;
 
-      const collapseBtn = panel.querySelector('#geo-companion-dashboard-collapse-btn');
-      const dashboardBody = panel.querySelector('#geo-companion-dashboard-body');
-      collapseBtn.addEventListener('click', () => {
-        dashboardCollapsed = !dashboardCollapsed;
-        dashboardBody.classList.toggle('gc-collapsed', dashboardCollapsed);
-        collapseBtn.textContent = dashboardCollapsed ? '▶' : '▼';
-      });
+      gcSetActions(
+        panel,
+        {
+          'dash-collapse': (_arg, btn) => {
+            dashboardCollapsed = !dashboardCollapsed;
+            panel.querySelector('#geo-companion-dashboard-body').classList.toggle('gc-collapsed', dashboardCollapsed);
+            btn.textContent = dashboardCollapsed ? '▶' : '▼';
+          },
+          'dash-delete': async (_arg, btn) => {
+            const filterMeta = FILTERS.find((f) => f.key === dashboardActiveFilter);
+            const periodLabel =
+              dashboardActiveFilter === 'all'
+                ? 'TOUT ton historique de rounds'
+                : `tes rounds des dernières ${filterMeta.label}`;
 
-      const deleteBtn = panel.querySelector('#geo-companion-dashboard-delete-btn');
-      deleteBtn.addEventListener('click', async () => {
-        const filterMeta = FILTERS.find((f) => f.key === dashboardActiveFilter);
-        const periodLabel =
-          dashboardActiveFilter === 'all' ? 'TOUT ton historique de rounds' : `tes rounds des dernières ${filterMeta.label}`;
+            const confirmed = confirm(`Supprimer ${periodLabel} ? Cette action est irréversible.`);
+            if (!confirmed) return;
 
-        const confirmed = confirm(
-          `Supprimer ${periodLabel} ? Cette action est irréversible.`
-        );
-        if (!confirmed) return;
+            btn.disabled = true;
+            btn.textContent = '⏳';
 
-        deleteBtn.disabled = true;
-        deleteBtn.textContent = '⏳';
-
-        const ok = await GeoCompanion.stats.deleteRoundsForPlayer(playerName, dashboardActiveFilter);
-        if (ok) {
-          console.log('[GeoCompanion] 🗑️ Rounds supprimés pour la période :', dashboardActiveFilter);
-          dashboardStatsCache.clear();
-          renderDashboardEmptyState(playerName); // la donnée vient de changer, on ne réaffiche pas l'ancien cache
-          deleteBtn.disabled = false;
-          deleteBtn.textContent = '🗑️';
-        } else {
-          GeoCompanion.notify('Erreur lors de la suppression des rounds', 'error');
-          deleteBtn.disabled = false;
-          deleteBtn.textContent = '🗑️';
-        }
-      });
-
-      panel.querySelectorAll('[data-dash-filter]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          dashboardActiveFilter = btn.dataset.dashFilter;
-          renderDashboard();
-          // Un clic sur un filtre est une demande explicite pour cette période : on charge depuis le cache s'il existe, sinon en réseau.
-          loadDashboardFilterData(playerName);
-        });
-      });
-      panel.querySelectorAll('[data-dash-continent]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const clicked = btn.dataset.dashContinent;
-          // Un clic sur le continent déjà actif le désélectionne (affiche tous les pays, tous continents confondus).
-          dashboardActiveContinent = dashboardActiveContinent === clicked ? null : clicked;
-          renderDashboard();
-        });
-      });
+            const ok = await GeoCompanion.stats.deleteRoundsForPlayer(playerName, dashboardActiveFilter);
+            if (ok) {
+              console.log('[GeoCompanion] 🗑️ Rounds supprimés pour la période :', dashboardActiveFilter);
+              dashboardStatsCache.clear();
+              renderDashboardEmptyState(playerName); // la donnée vient de changer, on ne réaffiche pas l'ancien cache
+            } else {
+              GeoCompanion.notify('Erreur lors de la suppression des rounds', 'error');
+            }
+            btn.disabled = false;
+            btn.textContent = '🗑️';
+          },
+          'dash-filter': (filterKey) => {
+            dashboardActiveFilter = filterKey;
+            renderDashboard();
+            // Un clic sur un filtre est une demande explicite pour cette période : on charge depuis le cache s'il existe, sinon en réseau.
+            loadDashboardFilterData(playerName);
+          },
+          'dash-continent': (continent) => {
+            // Un clic sur le continent déjà actif le désélectionne (affiche tous les pays, tous continents confondus).
+            dashboardActiveContinent = dashboardActiveContinent === continent ? null : continent;
+            renderDashboard();
+          },
+        },
+        { reset: true }
+      );
 
       if (!playerName) {
         const listEl = panel.querySelector('#geo-companion-dashboard-list');
@@ -2643,23 +3031,61 @@ function ensureDashboard() {
 
     // Carte native "Indices", insérée dans la colonne des raccourcis de la page d'accueil (au-dessus de Daily Challenge).
     let nativeCardObserver = null;
+    // Observer temporaire utilisé uniquement le temps que React monte la liste (voir plus bas) — distinct de
+    // nativeCardObserver qui, lui, surveille en continu que notre carte ne disparaisse pas après insertion.
+    let nativeCardBootstrapObserver = null;
 
     function ensureIndicesNativeCard() {
       if (!isHomepage()) return;
       const cardsList = document.querySelector('ul[class*="new-start-page-left_cards__"]');
-      if (!cardsList) return;
+      if (!cardsList) {
+        // Le script tourne dès document-start : au tout premier chargement, React peut ne pas avoir encore monté
+        // cette liste au moment de cet appel (course avec l'hydratation) — sans ce filet, le bouton n'apparaît
+        // alors qu'après une navigation SPA ultérieure (d'où "ça marche après un second refresh"). On observe le
+        // document jusqu'à ce que la liste existe, plutôt que d'abandonner silencieusement.
+        if (!nativeCardBootstrapObserver) {
+          nativeCardBootstrapObserver = new MutationObserver(() => {
+            if (document.querySelector('ul[class*="new-start-page-left_cards__"]')) {
+              nativeCardBootstrapObserver.disconnect();
+              nativeCardBootstrapObserver = null;
+              ensureIndicesNativeCard();
+            }
+          });
+          nativeCardBootstrapObserver.observe(document.body, { childList: true, subtree: true });
+        }
+        return;
+      }
 
       if (!document.getElementById('geo-companion-native-indices-card')) {
         const li = document.createElement('li');
         li.id = 'geo-companion-native-indices-card';
         li.className = 'gc-native-card-li';
+        // Structure calquée sur les cartes natives GeoGuessr (Daily Challenge / World / Competitive) :
+        // surface > relief + gradient + bgImage (décor) > iconWrapper (icône) > shimmerMask (reflet animé)
+        // > title (h2) > collapsible > collapsibleInner > collapsed (sous-titre).
         li.innerHTML = `
-          <a href="#" class="gc-native-card">
-            <div class="gc-native-card-text">
-              <span class="gc-native-card-title">Indices</span>
-              <span class="gc-native-card-subtitle">Voir la carte des indices</span>
+          <a href="#" class="gc-native-card-link">
+            <div class="gc-native-card-surface">
+              <i class="gc-native-card-relief" aria-hidden="true"></i>
+              <i class="gc-native-card-gradient" aria-hidden="true"></i>
+              <i class="gc-native-card-bg-image" aria-hidden="true"></i>
+              <div class="gc-native-card-icon-wrapper" aria-hidden="true">
+                <span class="gc-native-card-icon-emoji">💡</span>
+              </div>
+              <div class="gc-native-card-shimmer-mask" aria-hidden="true">
+                <div class="gc-native-card-shimmer"></div>
+              </div>
+              <div class="gc-native-card-title">
+                <h2 class="gc-native-card-heading">Indices</h2>
+              </div>
+              <div class="gc-native-card-collapsible gc-native-card-collapsible--open" aria-hidden="false">
+                <div class="gc-native-card-collapsible-inner">
+                  <div class="gc-native-card-collapsed">
+                    <div class="gc-native-card-subtitle">Cartes des indices</div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="gc-native-card-icon" aria-hidden="true">💡</div>
           </a>
         `;
         li.querySelector('a').addEventListener('click', (e) => {
@@ -2686,6 +3112,10 @@ function ensureDashboard() {
       if (nativeCardObserver) {
         nativeCardObserver.disconnect();
         nativeCardObserver = null;
+      }
+      if (nativeCardBootstrapObserver) {
+        nativeCardBootstrapObserver.disconnect();
+        nativeCardBootstrapObserver = null;
       }
       const el = document.getElementById('geo-companion-native-indices-card');
       if (el) el.remove();
@@ -2841,14 +3271,14 @@ function ensureDashboard() {
         <div class="gc-card-header gc-mb-8 gc-shrink-0">
           <div class="gc-title gc-fs-18">💡 Indices par pays</div>
           <div class="gc-flex-gap-6">
-            <button id="geo-companion-indices-close-btn" class="gc-btn gc-icon-btn gc-fs-18" title="Fermer">✕</button>
+            <button data-action="indices-close" class="gc-btn gc-icon-btn gc-fs-18" title="Fermer">✕</button>
           </div>
         </div>
         <div id="geo-companion-indices-map-body" class="gc-flex-col-fill gc-scroll-fill">
           <div class="gc-muted gc-fs-14">Chargement de la carte…</div>
         </div>
       `;
-      panel.querySelector('#geo-companion-indices-close-btn').addEventListener('click', closeIndicesMap);
+      gcSetActions(panel, { 'indices-close': () => closeIndicesMap() }, { reset: true });
 
       const [svgText, tipCounts, infoCounts] = await Promise.all([
         getWorldMapSvgMarkup(),

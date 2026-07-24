@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Companion
 // @namespace    geoguessr-companion
-// @version      3.0
+// @version      3.22
 // @description  Compagnon d'entraînement GeoGuessr : détection d'events, historique, tips, stats (test edit Claude)
 // @match        https://www.geoguessr.com/*
 // @run-at       document-start
@@ -383,7 +383,6 @@
       .gc-img:hover { filter: brightness(1.1); }
 
       /* ==== Carte des indices (page d'accueil) ==== */
-      .gc-btn--indices-open { width: 100%; }
       .gc-indices-backdrop {
         position: fixed;
         inset: 0;
@@ -419,10 +418,7 @@
         justify-content: center;
         overflow: hidden;
         position: relative;
-        cursor: grab;
-        touch-action: none;
       }
-      .gc-indices-map-wrap--dragging { cursor: grabbing; }
       .gc-indices-map-svg { width: 100%; height: 100%; max-height: 100%; }
       .gc-indices-tooltip {
         position: fixed;
@@ -436,17 +432,6 @@
         pointer-events: none;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
       }
-      /* Vue "grande" du panneau tips, utilisée quand il est ouvert depuis la carte des indices plutôt qu'en fin de round. */
-      .gc-tips-panel--big {
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        width: min(90vw, 900px);
-        max-height: 88vh;
-        font-size: 21px;
-        z-index: 9999999;
-      }
-
       .gc-toast {
         position: fixed;
         bottom: 20px;
@@ -460,6 +445,55 @@
         z-index: 9999999;
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
         max-width: 80vw;
+      }
+
+      /* ==== Carte "Indices" injectée nativement dans la colonne d'accueil ==== */
+      .gc-native-card-li { list-style: none; }
+      .gc-native-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px;
+        border-radius: var(--surface-radius-outer, 1rem);
+        background: var(--gc-bg-gradient);
+        border: var(--gc-border);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+        text-decoration: none;
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+      }
+      .gc-native-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(121, 80, 229, 0.35);
+        filter: brightness(1.08);
+      }
+      .gc-native-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .gc-native-card-title {
+        font-family: var(--gc-font);
+        font-weight: 700;
+        font-style: italic;
+        font-size: 18px;
+        color: var(--gc-text);
+      }
+      .gc-native-card-subtitle {
+        font-family: var(--gc-font);
+        font-weight: 400;
+        font-style: italic;
+        font-size: 14px;
+        color: var(--gc-text);
+        opacity: 0.6;
+      }
+      .gc-native-card-icon {
+        flex-shrink: 0;
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        background: var(--gc-accent-gradient);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
       }
     `;
     document.head.appendChild(style);
@@ -1801,10 +1835,14 @@
       });
     }
 
-    async function renderTips(row) {
+    async function renderTips(row, targetPanel) {
       const tips = await GeoCompanion.tips.listTipsForCountry(row.country_code);
-      const tipsPanel = ensureTipsPanel();
-      tipsPanel.classList.toggle('gc-panel--duel-offset', row.game_mode === 'duel');
+      // En vue "indices" (depuis la carte des indices), le contenu s'affiche dans le panneau carte déjà ouvert
+      // (targetPanel fourni) plutôt que dans le panneau de tips habituel — même élément DOM, pas de nouvelle popup.
+      const tipsPanel = targetPanel || ensureTipsPanel();
+      if (!targetPanel) {
+        tipsPanel.classList.toggle('gc-panel--duel-offset', row.game_mode === 'duel');
+      }
 
       const plonkitUrl = plonkitUrlFromCode(row.country_code);
       const info = await GeoCompanion.countryInfo.getCountryInfo(row.country_code);
@@ -1812,7 +1850,11 @@
       tipsPanel.innerHTML = `
         <div class="gc-card-header gc-mb-8 gc-shrink-0">
           <div class="gc-title">
-            💡 Tips ${
+            ${
+              row.game_mode === 'indices-view'
+                ? `${flagImgFromCode(row.country_code, { height: '0.9em' })} ${countryNameFromCode(row.country_code)} — 💡 Tips`
+                : '💡 Tips'
+            } ${
               plonkitUrl
                 ? `<a href="${plonkitUrl}" target="_blank" rel="noopener noreferrer" class="gc-link gc-fs-17">🔗 Plonkit</a>`
                 : ''
@@ -1820,10 +1862,14 @@
           </div>
           <div class="gc-flex-gap-6">
             <button id="geo-companion-tips-refresh-btn" title="Actualiser les tips" class="gc-btn gc-icon-btn gc-fs-16">🔄</button>
-            <button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-icon-btn gc-fs-18">▼</button>
             ${
               row.game_mode === 'indices-view'
-                ? `<button id="geo-companion-tips-close-indices-btn" title="Fermer" class="gc-btn gc-icon-btn gc-fs-18">✕</button>`
+                ? ''
+                : '<button id="geo-companion-tips-collapse-btn" title="Replier/déplier" class="gc-btn gc-icon-btn gc-fs-18">▼</button>'
+            }
+            ${
+              row.game_mode === 'indices-view'
+                ? `<button id="geo-companion-tips-back-to-map-btn" title="Retour à la carte" class="gc-btn gc-icon-btn gc-fs-18">◀</button>`
                 : ''
             }
           </div>
@@ -1852,10 +1898,12 @@
 
       const collapseBtn = tipsPanel.querySelector('#geo-companion-tips-collapse-btn');
       const tipsBody = tipsPanel.querySelector('#geo-companion-tips-body');
-      collapseBtn.addEventListener('click', () => {
-        const nowCollapsed = tipsBody.classList.toggle('gc-collapsed');
-        collapseBtn.textContent = nowCollapsed ? '▶' : '▼';
-      });
+      if (collapseBtn) {
+        collapseBtn.addEventListener('click', () => {
+          const nowCollapsed = tipsBody.classList.toggle('gc-collapsed');
+          collapseBtn.textContent = nowCollapsed ? '▶' : '▼';
+        });
+      }
 
       const refreshBtn = tipsPanel.querySelector('#geo-companion-tips-refresh-btn');
       refreshBtn.addEventListener('click', async () => {
@@ -1863,8 +1911,8 @@
         await renderTips(row);
       });
 
-      const closeIndicesBtn = tipsPanel.querySelector('#geo-companion-tips-close-indices-btn');
-      if (closeIndicesBtn) closeIndicesBtn.addEventListener('click', closeIndicesDetail);
+      const backToMapBtn = tipsPanel.querySelector('#geo-companion-tips-back-to-map-btn');
+      if (backToMapBtn) backToMapBtn.addEventListener('click', returnToIndicesMap);
 
       tipsPanel.querySelectorAll('[data-edit-tip]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -2504,7 +2552,6 @@ function ensureDashboard() {
         </div>
         <div id="geo-companion-dashboard-body" class="gc-flex-col-fill ${dashboardCollapsed ? 'gc-collapsed' : ''}">
           <hr class="gc-hr gc-hr--dashed gc-hr-tight">
-          <button id="geo-companion-indices-open-btn" class="gc-btn gc-btn--secondary gc-btn--indices-open gc-mb-8">💡 Voir la carte des indices</button>
           <div class="gc-btn-row gc-mb-8 gc-shrink-0">
             ${FILTERS.map(
               (f) => `
@@ -2526,9 +2573,6 @@ function ensureDashboard() {
           <div id="geo-companion-dashboard-list" class="gc-scroll-fill"></div>
         </div>
       `;
-
-      const indicesOpenBtn = panel.querySelector('#geo-companion-indices-open-btn');
-      if (indicesOpenBtn) indicesOpenBtn.addEventListener('click', () => openIndicesMap());
 
       const collapseBtn = panel.querySelector('#geo-companion-dashboard-collapse-btn');
       const dashboardBody = panel.querySelector('#geo-companion-dashboard-body');
@@ -2597,14 +2641,66 @@ function ensureDashboard() {
       }
     }
 
+    // Carte native "Indices", insérée dans la colonne des raccourcis de la page d'accueil (au-dessus de Daily Challenge).
+    let nativeCardObserver = null;
+
+    function ensureIndicesNativeCard() {
+      if (!isHomepage()) return;
+      const cardsList = document.querySelector('ul[class*="new-start-page-left_cards__"]');
+      if (!cardsList) return;
+
+      if (!document.getElementById('geo-companion-native-indices-card')) {
+        const li = document.createElement('li');
+        li.id = 'geo-companion-native-indices-card';
+        li.className = 'gc-native-card-li';
+        li.innerHTML = `
+          <a href="#" class="gc-native-card">
+            <div class="gc-native-card-text">
+              <span class="gc-native-card-title">Indices</span>
+              <span class="gc-native-card-subtitle">Voir la carte des indices</span>
+            </div>
+            <div class="gc-native-card-icon" aria-hidden="true">💡</div>
+          </a>
+        `;
+        li.querySelector('a').addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openIndicesMap();
+        });
+        cardsList.insertBefore(li, cardsList.firstChild);
+      }
+
+      // React peut re-render cette liste (retirant notre <li> au passage) : on la réinjecte si elle disparaît.
+      if (!nativeCardObserver) {
+        const watchTarget = document.querySelector('[class*="new-start-page-left_root__"]') || document.body;
+        nativeCardObserver = new MutationObserver(() => {
+          if (isHomepage() && !document.getElementById('geo-companion-native-indices-card')) {
+            ensureIndicesNativeCard();
+          }
+        });
+        nativeCardObserver.observe(watchTarget, { childList: true, subtree: true });
+      }
+    }
+
+    function removeIndicesNativeCard() {
+      if (nativeCardObserver) {
+        nativeCardObserver.disconnect();
+        nativeCardObserver = null;
+      }
+      const el = document.getElementById('geo-companion-native-indices-card');
+      if (el) el.remove();
+    }
+
     function checkHomepage() {
       const nowInGameplayUrl = isGameplayUrl(pageWindow.location.pathname);
       if (isHomepage()) {
         renderDashboard();
+        ensureIndicesNativeCard();
         // Filet de sécurité : en live challenge, la fin de partie/round n'est pas toujours détectée de façon fiable (voir apiDetectionModule).
         if (GeoCompanion.hideResultAndTipsPanels) GeoCompanion.hideResultAndTipsPanels();
       } else {
         removeDashboard();
+        removeIndicesNativeCard();
         closeIndicesMap();
         // Complète le filet ci-dessus pour le cas où le joueur quitte la partie vers une page qui n'est ni l'accueil ni une page de jeu.
         if (wasInGameplayUrl && !nowInGameplayUrl && GeoCompanion.hideResultAndTipsPanels) {
@@ -2681,15 +2777,15 @@ function ensureDashboard() {
         panel.id = INDICES_MAP_ID;
         panel.className = 'gc-panel gc-panel--outlined gc-indices-map-panel';
         document.body.appendChild(panel);
+
+        // Ce même panneau affiche aussi bien la carte que la vue détail d'un pays (voir openIndicesDetail) :
+        // la délégation lightbox doit donc être posée ici, comme pour le panneau de tips normal.
+        panel.addEventListener('click', (e) => {
+          const img = e.target.closest('img[data-lightbox]');
+          if (img) openImageLightbox(img.src);
+        });
       }
       return panel;
-    }
-
-    function closeIndicesDetail() {
-      const tipsPanel = document.getElementById(TIPS_PANEL_ID);
-      if (tipsPanel && tipsPanel.classList.contains('gc-tips-panel--big')) {
-        tipsPanel.remove();
-      }
     }
 
     function closeIndicesMap() {
@@ -2699,17 +2795,28 @@ function ensureDashboard() {
       if (panel) panel.remove();
       const tooltip = document.getElementById('geo-companion-indices-tooltip');
       if (tooltip) tooltip.remove();
-      closeIndicesDetail();
+    }
+
+    // Depuis la vue détail d'un pays : régénère le contenu carte DANS LE MÊME panneau (pas de nouvel élément créé/détruit,
+    // donc pas de "saut" visuel), en réutilisant simplement la fonction qui construit la vue carte.
+    function returnToIndicesMap() {
+      const panel = document.getElementById(INDICES_MAP_ID);
+      if (panel) renderIndicesMapContent(panel);
     }
 
     async function openIndicesDetail(code) {
+      // La vue détail s'affiche DANS LE MÊME panneau que la carte (même élément DOM, même position/taille) —
+      // seul le contenu intérieur change, pas de nouvelle popup qui apparaît par-dessus.
+      const panel = document.getElementById(INDICES_MAP_ID);
+      if (!panel) return; // le panneau carte doit déjà être ouvert pour afficher un détail
+
+      // La tooltip de survol (nom du pays + nb d'indices) reste affichée sinon, car le clic ne déclenche pas
+      // de "mouseleave" sur le <path> (le contenu change sous la souris sans qu'elle bouge).
+      const tooltip = document.getElementById('geo-companion-indices-tooltip');
+      if (tooltip) tooltip.classList.add('gc-collapsed');
+
       const row = { country_code: code, game_mode: 'indices-view' };
-      await renderTips(row);
-      const tipsPanel = document.getElementById(TIPS_PANEL_ID);
-      if (tipsPanel) {
-        tipsPanel.classList.add('gc-tips-panel--big');
-        tipsPanel.classList.remove('gc-panel--duel-offset');
-      }
+      await renderTips(row, panel);
     }
 
     async function openIndicesMap() {
@@ -2724,11 +2831,16 @@ function ensureDashboard() {
       }
 
       const panel = ensureIndicesMapPanel();
+      await renderIndicesMapContent(panel);
+    }
+
+    // Construit la vue "carte" à l'intérieur d'un panneau déjà existant — factorisé pour être appelable à la fois
+    // à l'ouverture (openIndicesMap) et au retour depuis la vue détail (returnToIndicesMap), sans recréer le panneau.
+    async function renderIndicesMapContent(panel) {
       panel.innerHTML = `
         <div class="gc-card-header gc-mb-8 gc-shrink-0">
           <div class="gc-title gc-fs-18">💡 Indices par pays</div>
           <div class="gc-flex-gap-6">
-            <button id="geo-companion-indices-zoom-reset-btn" class="gc-btn gc-icon-btn gc-fs-16" title="Réinitialiser le zoom">🔎</button>
             <button id="geo-companion-indices-close-btn" class="gc-btn gc-icon-btn gc-fs-18" title="Fermer">✕</button>
           </div>
         </div>
@@ -2782,95 +2894,8 @@ function ensureDashboard() {
       // on force explicitement l'interactivité pour ne pas en dépendre.
       svgEl.style.pointerEvents = 'auto';
 
-      // ZOOM / DÉPLACEMENT : molette pour zoomer (centré sur le curseur), glisser pour se déplacer une fois zoomé —
-      // utile pour sélectionner précisément les petites îles/archipels. État remis à zéro à chaque ouverture de la carte.
-      const wrap = body.querySelector('.gc-indices-map-wrap');
-      let indicesZoom = 1;
-      let indicesPanX = 0;
-      let indicesPanY = 0;
-      const INDICES_ZOOM_MIN = 1;
-      const INDICES_ZOOM_MAX = 10;
-
-      function applyIndicesTransform() {
-        svgEl.style.transform = `translate(${indicesPanX}px, ${indicesPanY}px) scale(${indicesZoom})`;
-      }
-      svgEl.style.transformOrigin = '0 0';
-      applyIndicesTransform();
-
-      wrap.addEventListener(
-        'wheel',
-        (e) => {
-          e.preventDefault();
-          const rect = wrap.getBoundingClientRect();
-          const mouseX = e.clientX - rect.left;
-          const mouseY = e.clientY - rect.top;
-          const zoomFactor = e.deltaY < 0 ? 1.25 : 1 / 1.25;
-          const newZoom = Math.min(INDICES_ZOOM_MAX, Math.max(INDICES_ZOOM_MIN, indicesZoom * zoomFactor));
-          if (newZoom === indicesZoom) return;
-          // Garde le point sous le curseur fixe pendant le zoom, plutôt que de zoomer depuis le coin.
-          indicesPanX = mouseX - ((mouseX - indicesPanX) / indicesZoom) * newZoom;
-          indicesPanY = mouseY - ((mouseY - indicesPanY) / indicesZoom) * newZoom;
-          indicesZoom = newZoom;
-          applyIndicesTransform();
-        },
-        { passive: false }
-      );
-
-      let isDragging = false;
-      let didDrag = false; // distingue un vrai clic pays d'un léger glisser, pour ne pas ouvrir un pays par erreur
-      let dragStartX = 0;
-      let dragStartY = 0;
-      let dragStartPanX = 0;
-      let dragStartPanY = 0;
-
-      wrap.addEventListener('pointerdown', (e) => {
-        isDragging = true;
-        didDrag = false;
-        dragStartX = e.clientX;
-        dragStartY = e.clientY;
-        dragStartPanX = indicesPanX;
-        dragStartPanY = indicesPanY;
-        wrap.classList.add('gc-indices-map-wrap--dragging');
-        wrap.setPointerCapture(e.pointerId);
-      });
-      wrap.addEventListener('pointermove', (e) => {
-        if (!isDragging) return;
-        const dx = e.clientX - dragStartX;
-        const dy = e.clientY - dragStartY;
-        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDrag = true;
-        indicesPanX = dragStartPanX + dx;
-        indicesPanY = dragStartPanY + dy;
-        applyIndicesTransform();
-      });
-      const endDrag = () => {
-        isDragging = false;
-        wrap.classList.remove('gc-indices-map-wrap--dragging');
-      };
-      wrap.addEventListener('pointerup', endDrag);
-      wrap.addEventListener('pointercancel', endDrag);
-
-      // Capturé AVANT le clic sur le <path> lui-même (phase de capture) : si on vient de glisser, on annule le clic pays.
-      svgEl.addEventListener(
-        'click',
-        (e) => {
-          if (didDrag) {
-            e.stopPropagation();
-            e.preventDefault();
-            didDrag = false;
-          }
-        },
-        { capture: true }
-      );
-
-      const zoomResetBtn = panel.querySelector('#geo-companion-indices-zoom-reset-btn');
-      if (zoomResetBtn) {
-        zoomResetBtn.addEventListener('click', () => {
-          indicesZoom = 1;
-          indicesPanX = 0;
-          indicesPanY = 0;
-          applyIndicesTransform();
-        });
-      }
+      // Zoom/déplacement retirés (v3.12) : la gestion de la capture de pointeur nécessaire pour distinguer un
+      // glissement d'un simple clic interférait avec le clic sur les pays. Carte statique et cliquable directement.
 
       // La tooltip doit être un enfant direct de <body>, PAS du panneau : .gc-indices-map-panel a un transform (pour se
       // centrer), et un transform sur un ancêtre change le repère de tout position:fixed à l'intérieur (il devient relatif
